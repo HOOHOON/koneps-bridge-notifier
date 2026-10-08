@@ -180,7 +180,7 @@ def download_attachment(url, temp_path):
     }
     req = urllib.request.Request(url, headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=20) as resp:
+        with urllib.request.urlopen(req, timeout=8) as resp:
             content = resp.read()
             with open(temp_path, 'wb') as f:
                 f.write(content)
@@ -573,6 +573,9 @@ def generate_web_dashboard(bids, bgn_date_str):
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
     <title>조달청 나라장터 교량/다리 통합 대시보드 (2억 원 이상)</title>
     <style>
         * {{ box-sizing: border-box; font-family: 'Pretendard', 'Apple SD Gothic Neo', sans-serif; }}
