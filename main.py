@@ -230,16 +230,16 @@ def analyze_structural_engineer(item):
 
 def build_telegram_messages(bids, bgn_date_str):
     header = (
-        f"📢 <b>[조달청 나라장터 교량/다리 입찰공고 알림]</b>\n"
-        f"📅 조회 기간: {bgn_date_str}\n"
+        f"📢 <b>[조달청 나라장터 교량/다리 입찰공고 당일 알림]</b>\n"
+        f"📅 조회 기준일: {bgn_date_str}\n"
         f"🔍 검색 분야: 기술용역, 공사\n"
         f"💰 가격 조건: 1억 원 이상\n"
-        f"📊 총 <b>{len(bids)}건</b>의 맞춤 공고가 발견되었습니다.\n"
+        f"📊 신규 <b>{len(bids)}건</b>의 공고가 등록되었습니다.\n"
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
     )
 
     if not bids:
-        return [header + "오늘 조건에 맞는 신규 입찰 공고가 없습니다. 😊"]
+        return [header + "오늘 아침 조건에 맞는 신규 입찰 공고가 없습니다. 😊"]
 
     messages = []
     current_msg = header
@@ -320,7 +320,7 @@ def send_email_report(smtp_server, smtp_port, smtp_user, smtp_pass, receivers, b
     if not receiver_list:
         return False
 
-    subject = f"[조달청 나라장터] 교량/다리/OO교 신규 입찰공고 알림 ({bgn_date_str}) - 총 {len(bids)}건"
+    subject = f"[조달청 나라장터] 교량/다리/OO교 신규 입찰공고 당일 알림 ({bgn_date_str}) - 총 {len(bids)}건"
 
     rows_html = ""
     for idx, bid in enumerate(bids, 1):
@@ -373,13 +373,13 @@ def send_email_report(smtp_server, smtp_port, smtp_user, smtp_pass, receivers, b
     <body style="font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; background-color: #f7fafc; margin: 0; padding: 20px;">
         <div style="max-width: 1050px; margin: 0 auto; background-color: #ffffff; padding: 30px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); border: 1px solid #e2e8f0;">
             <h2 style="color: #1a365d; margin-top: 0; border-bottom: 2px solid #3182ce; padding-bottom: 12px;">
-                🌉 조달청 나라장터 입찰공고 매일 리포트
+                🌉 조달청 나라장터 입찰공고 당일 리포트
             </h2>
             <div style="background-color: #ebf8ff; border-left: 4px solid #3182ce; padding: 12px 16px; margin-bottom: 24px; border-radius: 4px; color: #2c5282;">
                 <strong>📅 조회 기준일:</strong> {bgn_date_str} | 
                 <strong>🔍 대상 분야:</strong> 기술용역, 공사 | 
                 <strong>💰 최소 금액:</strong> 1억 원 이상 | 
-                <strong>📊 총 수집 건수:</strong> <span style="font-size:18px; font-weight:bold; color:#e53e3e;">{len(bids)}건</span>
+                <strong>📊 당일 수집 건수:</strong> <span style="font-size:18px; font-weight:bold; color:#e53e3e;">{len(bids)}건</span>
             </div>
 
             <table style="width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 14px;">
@@ -395,7 +395,7 @@ def send_email_report(smtp_server, smtp_port, smtp_user, smtp_pass, receivers, b
                     </tr>
                 </thead>
                 <tbody>
-                    {rows_html if bids else '<tr><td colspan="7" style="padding: 30px; text-align: center; color: #a0aec0;">조건에 맞는 신규 입찰 공고가 없습니다.</td></tr>'}
+                    {rows_html if bids else '<tr><td colspan="7" style="padding: 30px; text-align: center; color: #a0aec0;">오늘 조건에 맞는 신규 입찰 공고가 없습니다.</td></tr>'}
                 </tbody>
             </table>
 
@@ -469,12 +469,12 @@ def generate_web_dashboard(bids, bgn_date_str):
 <body>
     <div class="container">
         <header>
-            <h1>🌉 조달청 나라장터 입찰공고 대시보드</h1>
+            <h1>🌉 조달청 나라장터 입찰공고 대시보드 (당일 기준)</h1>
             <div style="font-size: 13px; color: #718096;">최종 업데이트: <strong>{datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}</strong></div>
         </header>
 
         <div class="info-bar">
-            <div>📌 <strong>조회 기간:</strong> {bgn_date_str} | <strong>대상 분야:</strong> 기술용역, 공사 | <strong>조건:</strong> 1억 원 이상</div>
+            <div>📌 <strong>조회 기준:</strong> 당일 ({bgn_date_str}) | <strong>대상 분야:</strong> 기술용역, 공사 | <strong>조건:</strong> 1억 원 이상</div>
             <div>수집된 공고: <span class="count-tag" id="totalCount">{len(bids)}</span>건</div>
         </div>
 
@@ -560,7 +560,7 @@ def generate_web_dashboard(bids, bgn_date_str):
 
             const tbody = document.getElementById('tableBody');
             if (filtered.length === 0) {{
-                tbody.innerHTML = `<tr><td colspan="7" style="text-align: center; padding: 40px; color: #a0aec0;">검색 조건에 맞는 공고가 없습니다.</td></tr>`;
+                tbody.innerHTML = `<tr><td colspan="7" style="text-align: center; padding: 40px; color: #a0aec0;">당일 조건에 맞는 신규 입찰 공고가 없습니다.</td></tr>`;
                 return;
             }}
 
@@ -605,10 +605,10 @@ def generate_web_dashboard(bids, bgn_date_str):
 
     with open('index.html', 'w', encoding='utf-8') as f:
         f.write(html_content)
-    print("✅ 웹 대시보드(index.html) 생성 완료!")
+    print("✅ 웹 대시보드(index.html) 당일 기준 생성 완료!")
 
 def main():
-    print("🚀 조달청 나라장터 [교량/공사 1억 이상 + 첨부파일 구조기술자 분석] 스크립트 시작")
+    print("🚀 조달청 나라장터 [당일 기준 교량/공사 1억 이상 + 첨부파일 구조기술자 분석] 시작")
 
     service_key = get_env_or_default('SERVICE_KEY', load_default_service_key())
     bot_token = get_env_or_default('TELEGRAM_BOT_TOKEN')
@@ -625,7 +625,8 @@ def main():
     exclude_keywords = ['학교', '초등', '고등']
     min_price_threshold = 100000000
 
-    search_days = int(get_env_or_default('SEARCH_DAYS', '7'))
+    # 당일 기준 조회 (매일 아침 실행되므로 1일 전~당일 24시간 범위)
+    search_days = int(get_env_or_default('SEARCH_DAYS', '1'))
 
     now = datetime.datetime.now()
     start_date = now - datetime.timedelta(days=search_days)
@@ -633,13 +634,13 @@ def main():
     end_dt = now.strftime('%Y%m%d2359')
     bgn_date_str = f"{start_date.strftime('%Y-%m-%d')} ~ {now.strftime('%Y-%m-%d')}"
 
-    print(f"📌 검색 기간: {bgn_dt} ~ {end_dt}")
+    print(f"📌 당일 검색 기간: {bgn_dt} ~ {end_dt}")
 
     all_bids_dict = {}
 
     for domain in target_domains:
         op_name, domain_kr = DOMAIN_OPERATIONS[domain]
-        print(f"\n🔎 [{domain_kr}] 분야 수집 중...")
+        print(f"\n🔎 [{domain_kr}] 분야 당일 수집 중...")
 
         for kw in search_keywords:
             items = fetch_bids(service_key, op_name, kw, bgn_dt, end_dt)
@@ -668,10 +669,10 @@ def main():
     all_bids = list(all_bids_dict.values())
     all_bids.sort(key=lambda x: int(x.get('presmptPrce') or x.get('asignBdgtAmt') or 0), reverse=True)
 
-    print(f"\n🎯 정제된 교량/공사 대상 공고 수: {len(all_bids)}건")
+    print(f"\n🎯 당일 정제된 교량/공사 대상 공고 수: {len(all_bids)}건")
 
     if all_bids:
-        print("📄 첨부파일(HWP, HWPX, PDF) 다운로드 및 구조분야 책임기술인 요건 자동 분석 중...")
+        print("📄 당일 공고 첨부파일(HWP, HWPX, PDF) 다운로드 및 구조분야 책임기술인 요건 자동 분석 중...")
         for idx, bid in enumerate(all_bids, 1):
             print(f"   [{idx}/{len(all_bids)}] {bid.get('bidNtceNm')[:30]}... 분석 중")
             has_struct, excerpt = analyze_structural_engineer(bid)
@@ -679,18 +680,6 @@ def main():
             bid['_struct_excerpt'] = excerpt
             if has_struct:
                 print(f"      👉 ✅ 구조분야 자격 명시 확인됨: {excerpt[:50]}")
-    else:
-        print("⚠️ 신규 데이터 0건인 경우 기존 index.html의 데이터를 유지합니다.")
-        if os.path.exists('index.html'):
-            try:
-                with open('index.html', 'r', encoding='utf-8') as f:
-                    content = f.read()
-                    match = re.search(r'const rawBids = (\[.*?\]);', content, re.DOTALL)
-                    if match:
-                        all_bids = json.loads(match.group(1))
-                        print(f"🔄 기존 대시보드 데이터 {len(all_bids)}건 재사용완료")
-            except Exception as e:
-                print(f"기존 대시보드 로드 예외: {e}")
 
     generate_web_dashboard(all_bids, bgn_date_str)
 
