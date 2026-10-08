@@ -189,9 +189,6 @@ def extract_text_pdf(file_path):
     return " ".join(text_content)
 
 def analyze_strict_lead_pm(item):
-    """
-    첨부서류(HWP, HWPX, PDF) 분석하여 '사업책임기술인' (총괄 PM) 전공 분야 파싱
-    """
     pm_keywords = ['사업책임기술인', '사업책임기술자', '사업책임자', '총괄책임기술인', '총괄책임기술자', '사업총괄책임']
     
     known_fields = [
@@ -239,7 +236,6 @@ def analyze_strict_lead_pm(item):
                 for line in lines:
                     line_clean = line.strip()
                     if any(pm_kw in line_clean for pm_kw in pm_keywords):
-                        # '분야별 책임기술인' 단독 언급 문장 제외
                         if '분야별' in line_clean and '사업책임' not in line_clean:
                             continue
                         pm_lines.append(re.sub(r'\s+', ' ', line_clean)[:120])
@@ -247,7 +243,6 @@ def analyze_strict_lead_pm(item):
     if not pm_lines:
         return False, "미확인 (서류 직접 확인 필요)", "첨부 서류 참조"
 
-    # 분야 매칭
     detected_field = "미확인"
     is_struct_pm = False
 
@@ -266,16 +261,16 @@ def analyze_strict_lead_pm(item):
 
 def build_telegram_messages(bids, bgn_date_str):
     header = (
-        f"📢 <b>[조달청 나라장터 교량/다리 입찰공고 24시간 리포트]</b>\n"
+        f"📢 <b>[조달청 나라장터 교량/다리 입찰공고 48시간 리포트]</b>\n"
         f"📅 수집 기간: {bgn_date_str}\n"
         f"🔍 검색 분야: 기술용역, 공사\n"
         f"💰 가격 조건: 1억 원 이상\n"
-        f"📊 최근 24시간 신규 <b>{len(bids)}건</b>의 공고가 등록되었습니다.\n"
+        f"📊 최근 48시간 신규 <b>{len(bids)}건</b>의 공고가 등록되었습니다.\n"
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
     )
 
     if not bids:
-        return [header + "지난 24시간 동안 조건에 맞는 신규 입찰 공고가 없습니다. 😊"]
+        return [header + "지난 48시간 동안 조건에 맞는 신규 입찰 공고가 없습니다. 😊"]
 
     messages = []
     current_msg = header
@@ -362,7 +357,7 @@ def send_email_report(smtp_server, smtp_port, smtp_user, smtp_pass, receivers, b
     if not receiver_list:
         return False
 
-    subject = f"[조달청 나라장터] 교량/다리/OO교 신규 입찰공고 24시간 리포트 ({bgn_date_str}) - 총 {len(bids)}건"
+    subject = f"[조달청 나라장터] 교량/다리/OO교 신규 입찰공고 48시간 리포트 ({bgn_date_str}) - 총 {len(bids)}건"
 
     rows_html = ""
     for idx, bid in enumerate(bids, 1):
@@ -416,10 +411,10 @@ def send_email_report(smtp_server, smtp_port, smtp_user, smtp_pass, receivers, b
     <body style="font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; background-color: #f7fafc; margin: 0; padding: 20px;">
         <div style="max-width: 1050px; margin: 0 auto; background-color: #ffffff; padding: 30px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); border: 1px solid #e2e8f0;">
             <h2 style="color: #1a365d; margin-top: 0; border-bottom: 2px solid #3182ce; padding-bottom: 12px;">
-                🌉 조달청 나라장터 입찰공고 24시간 매일 리포트
+                🌉 조달청 나라장터 입찰공고 48시간 매일 리포트
             </h2>
             <div style="background-color: #ebf8ff; border-left: 4px solid #3182ce; padding: 12px 16px; margin-bottom: 24px; border-radius: 4px; color: #2c5282;">
-                <strong>📅 수집 기간 (최근 24시간):</strong> {bgn_date_str} | 
+                <strong>📅 수집 기간 (최근 48시간):</strong> {bgn_date_str} | 
                 <strong>🔍 대상 분야:</strong> 기술용역, 공사 | 
                 <strong>💰 최소 금액:</strong> 1억 원 이상 | 
                 <strong>📊 수집 건수:</strong> <span style="font-size:18px; font-weight:bold; color:#e53e3e;">{len(bids)}건</span>
@@ -438,7 +433,7 @@ def send_email_report(smtp_server, smtp_port, smtp_user, smtp_pass, receivers, b
                     </tr>
                 </thead>
                 <tbody>
-                    {rows_html if bids else '<tr><td colspan="7" style="padding: 30px; text-align: center; color: #a0aec0;">지난 24시간 동안 조건에 맞는 신규 입찰 공고가 없습니다.</td></tr>'}
+                    {rows_html if bids else '<tr><td colspan="7" style="padding: 30px; text-align: center; color: #a0aec0;">지난 48시간 동안 조건에 맞는 신규 입찰 공고가 없습니다.</td></tr>'}
                 </tbody>
             </table>
 
@@ -513,12 +508,12 @@ def generate_web_dashboard(bids, bgn_date_str):
 <body>
     <div class="container">
         <header>
-            <h1>🌉 조달청 나라장터 입찰공고 대시보드 (구조부 주관 분석)</h1>
+            <h1>🌉 조달청 나라장터 입찰공고 대시보드 (최근 48시간)</h1>
             <div style="font-size: 13px; color: #718096;">최종 업데이트: <strong>{datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}</strong></div>
         </header>
 
         <div class="info-bar">
-            <div>📌 <strong>수집 기간 (최근 24시간):</strong> {bgn_date_str} | <strong>대상 분야:</strong> 기술용역, 공사 | <strong>조건:</strong> 1억 원 이상</div>
+            <div>📌 <strong>수집 기간 (최근 48시간):</strong> {bgn_date_str} | <strong>대상 분야:</strong> 기술용역, 공사 | <strong>조건:</strong> 1억 원 이상</div>
             <div>수집된 공고: <span class="count-tag" id="totalCount">{len(bids)}</span>건</div>
         </div>
 
@@ -609,7 +604,7 @@ def generate_web_dashboard(bids, bgn_date_str):
 
             const tbody = document.getElementById('tableBody');
             if (filtered.length === 0) {{
-                tbody.innerHTML = `<tr><td colspan="7" style="text-align: center; padding: 40px; color: #a0aec0;">검색 조건에 맞는 공고가 없습니다.</td></tr>`;
+                tbody.innerHTML = `<tr><td colspan="7" style="text-align: center; padding: 40px; color: #a0aec0;">최근 48시간 동안 조건에 맞는 신규 입찰 공고가 없습니다.</td></tr>`;
                 return;
             }}
 
@@ -655,10 +650,10 @@ def generate_web_dashboard(bids, bgn_date_str):
 
     with open('index.html', 'w', encoding='utf-8') as f:
         f.write(html_content)
-    print("✅ 웹 대시보드(index.html) 사업책임기술인 주관분야 반영 생성 완료!")
+    print("✅ 웹 대시보드(index.html) 최근 48시간 기준 생성 완료!")
 
 def main():
-    print("🚀 조달청 나라장터 [최근 24시간 교량/공사 1억 이상 + 사업책임기술인(TL) 분석] 시작")
+    print("🚀 조달청 나라장터 [최근 48시간 교량/공사 1억 이상 + 사업책임기술인(TL) 분석] 시작")
 
     service_key = get_env_or_default('SERVICE_KEY', load_default_service_key())
     bot_token = get_env_or_default('TELEGRAM_BOT_TOKEN')
@@ -675,19 +670,22 @@ def main():
     exclude_keywords = ['학교', '초등', '고등']
     min_price_threshold = 100000000
 
+    # 48시간 (2일) 기준 조회
+    search_days = int(get_env_or_default('SEARCH_DAYS', '2'))
+
     now = datetime.datetime.now()
-    start_date = now - datetime.timedelta(hours=24)
+    start_date = now - datetime.timedelta(hours=24 * search_days)
     bgn_dt = start_date.strftime('%Y%m%d%H%M')
     end_dt = now.strftime('%Y%m%d%H%M')
     bgn_date_str = f"{start_date.strftime('%Y-%m-%d %H:%M')} ~ {now.strftime('%Y-%m-%d %H:%M')}"
 
-    print(f"📌 최근 24시간 검색 기간: {bgn_dt} ~ {end_dt}")
+    print(f"📌 최근 {search_days*24}시간 검색 기간: {bgn_dt} ~ {end_dt}")
 
     all_bids_dict = {}
 
     for domain in target_domains:
         op_name, domain_kr = DOMAIN_OPERATIONS[domain]
-        print(f"\n🔎 [{domain_kr}] 분야 24시간 수집 중...")
+        print(f"\n🔎 [{domain_kr}] 분야 수집 중...")
 
         for kw in search_keywords:
             items = fetch_bids(service_key, op_name, kw, bgn_dt, end_dt)
@@ -715,7 +713,7 @@ def main():
     all_bids = list(all_bids_dict.values())
     all_bids.sort(key=lambda x: int(x.get('presmptPrce') or x.get('asignBdgtAmt') or 0), reverse=True)
 
-    print(f"\n🎯 최근 24시간 대상 공고 수: {len(all_bids)}건")
+    print(f"\n🎯 최근 {search_days*24}시간 대상 공고 수: {len(all_bids)}건")
 
     if all_bids:
         print("📄 첨부파일(HWP, HWPX, PDF) 자동 파싱하여 사업책임기술인(TL/총괄) 주관분야 분석 중...")
