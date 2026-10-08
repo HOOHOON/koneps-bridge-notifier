@@ -110,7 +110,6 @@ def format_price(amount_str):
         return str(amount_str)
 
 def is_target_bridge_title(title):
-    # 학교 연계 표현 (예: "초 외 1교", "향교", "중학") 예외 처리
     if re.search(r'외\s*\d+\s*교', title) or '향교' in title or '중학' in title:
         return False
     if '교량' in title or '다리' in title:
@@ -188,9 +187,24 @@ def extract_text_pdf(file_path):
         pass
     return " ".join(text_content)
 
-def analyze_structural_engineer(item):
-    keywords = ['구조분야', '구조 분야', '토목구조', '토목 구조', '구조책임', '구조 책임', '구조기술사', '구조 기술사', '구조전문', '구조 전문']
-    matched_excerpts = []
+def analyze_attachments(item):
+    """
+    첨부서류(HWP, HWPX, PDF) 분석하여:
+    1. 구조분야 기술인 명시 여부 (_struct_has, _struct_excerpt)
+    2. 사업책임기술인 분야 명시 (_lead_field, _lead_excerpt)
+    추출
+    """
+    struct_keywords = ['구조분야', '구조 분야', '토목구조', '토목 구조', '구조책임', '구조 책임', '구조기술사', '구조 기술사', '구조전문', '구조 전문']
+    lead_keywords = ['사업책임기술인', '사업책임기술자', '사업책임자', '책임기술인', '책임기술자', '분야책임기술인', '분야책임기술자']
+    
+    known_fields = [
+        '토목구조', '토목 구조', '도로·공항', '도로및공항', '도로', '수자원개발', '수자원', 
+        '토질·지질', '토질지질', '토질', '안전진단', '시공', '상하수도', '도시계획', 
+        '교통', '건축', '전기', '기계', '환경', '측량', '토목'
+    ]
+
+    struct_excerpts = []
+    lead_lines = []
 
     for k in range(1, 4):
         doc_url = item.get(f'ntceSpecDocUrl{k}')
@@ -220,13 +234,32 @@ def analyze_structural_engineer(item):
                 lines = re.split(r'[\.\?\!\n\r]', text)
                 for line in lines:
                     line_clean = line.strip()
-                    if any(kw in line_clean for kw in keywords):
+                    if not line_clean:
+                        continue
+                    
+                    # 1. 구조분야 검사
+                    if any(kw in line_clean for kw in struct_keywords):
                         if any(rel in line_clean for rel in ['책임', '기술자', '기술인', '자격', '평가', '배점', '분야', '담당', '투입']):
-                            matched_excerpts.append(line_clean[:100])
+                            struct_excerpts.append(line_clean[:100])
 
-    if matched_excerpts:
-        return True, matched_excerpts[0]
-    return False, "첨부파일 서류 직접 확인 필요"
+                    # 2. 사업책임기술인 분야 검사
+                    if any(lkw in line_clean for lkw in lead_keywords):
+                        lead_lines.append(re.sub(r'\s+', ' ', line_clean)[:120])
+
+    struct_has = len(struct_excerpts) > 0
+    struct_exc = struct_excerpts[0] if struct_has else "첨부 서류 직접 확인 필요"
+
+    # 사업책임기술인 분야 정리
+    detected_fields = []
+    for l in lead_lines[:5]:
+        for f in known_fields:
+            if f in l and f not in detected_fields:
+                detected_fields.append(f)
+
+    lead_field = ", ".join(detected_fields) if detected_fields else ("토목/구조 관련" if struct_has else "서류참조")
+    lead_exc = lead_lines[0] if lead_lines else "첨부파일 서류 직접 확인 필요"
+
+    return struct_has, struct_exc, lead_field, lead_exc
 
 def build_telegram_messages(bids, bgn_date_str):
     header = (
@@ -256,9 +289,8 @@ def build_telegram_messages(bids, bgn_date_str):
         cntrct_mthd = bid.get('cntrctCnclsMthdNm', '미지정')
         detail_url = bid.get('bidNtceDtlUrl') or f"https://www.g2b.go.kr/link/PNPE027_01/single/?bidPbancNo={bid_no}&bidPbancOrd={ord_no}"
 
-        struct_has = bid.get('_struct_has', False)
-        struct_exc = bid.get('_struct_excerpt', '')
-        struct_tag = f"<b>✅ 구조분야 확인됨</b>: <i>{struct_exc}</i>" if struct_has else "<b>🔍 구조분야</b>: 첨부 서류 직접 확인 필요"
+        lead_field = bid.get('_lead_field', '서류참조')
+        lead_exc = bid.get('_lead_excerpt', '')
 
         item_str = (
             f"<b>{idx}. [{domain_kr}] {title}</b>\n"
@@ -268,7 +300,8 @@ def build_telegram_messages(bids, bgn_date_str):
             f"• <b>배정예산</b>: {asign_bdgt}\n"
             f"• <b>계약방법</b>: {cntrct_mthd}\n"
             f"• <b>마감일시</b>: <code>{bid_clse_dt}</code>\n"
-            f"• <b>자격분석</b>: {struct_tag}\n"
+            f"• <b>사업책임기술인 분야</b>: <b>{lead_field}</b>\n"
+            f"  <i>({lead_exc[:60]}...)</i>\n"
             f"🔗 <a href='{detail_url}'>나라장터 공고 상세 보기</a>\n\n"
         )
 
@@ -334,13 +367,10 @@ def send_email_report(smtp_server, smtp_port, smtp_user, smtp_pass, receivers, b
         cntrct_mthd = bid.get('cntrctCnclsMthdNm', '미지정')
         detail_url = bid.get('bidNtceDtlUrl') or f"https://www.g2b.go.kr/link/PNPE027_01/single/?bidPbancNo={bid_no}&bidPbancOrd=000"
 
-        struct_has = bid.get('_struct_has', False)
-        struct_exc = bid.get('_struct_excerpt', '')
+        lead_field = bid.get('_lead_field', '서류참조')
+        lead_exc = bid.get('_lead_excerpt', '')
         
-        if struct_has:
-            struct_badge = f'<div style="margin-top:6px; background-color:#e6fffa; color:#234e52; border:1px solid #b2f5ea; padding:4px 8px; border-radius:4px; font-size:12px;"><strong>✅ 구조분야 기술인 발견:</strong> {struct_exc}</div>'
-        else:
-            struct_badge = f'<div style="margin-top:6px; color:#718096; font-size:11px;">🔍 구조분야 자격: 첨부 서류 직접 확인 필요</div>'
+        lead_badge = f'<div style="margin-top:6px; background-color:#ebf8ff; color:#2c5282; border:1px solid #bee3f8; padding:4px 8px; border-radius:4px; font-size:12px;"><strong>👷 사업책임기술인 분야:</strong> <span style="font-weight:bold; color:#2b6cb0;">{lead_field}</span> ({lead_exc[:50]}...)</div>'
 
         bg_color = "#ffffff" if idx % 2 != 0 else "#f9fbfd"
 
@@ -353,7 +383,7 @@ def send_email_report(smtp_server, smtp_port, smtp_user, smtp_pass, receivers, b
             <td style="padding: 12px;">
                 <a href="{detail_url}" target="_blank" style="color: #2b6cb0; text-decoration: none; font-weight: bold;">{title}</a>
                 <div style="color: #718096; font-size: 12px; margin-top: 4px;">공고번호: {bid_no} | 계약방식: {cntrct_mthd}</div>
-                {struct_badge}
+                {lead_badge}
             </td>
             <td style="padding: 12px; color: #2d3748; font-weight: 500;">{instt_nm}</td>
             <td style="padding: 12px; text-align: right; color: #2c5282; font-weight: bold;">{presmpt_prce}<br><span style="color:#718096; font-size:11px; font-weight:normal;">(예산: {asign_bdgt})</span></td>
@@ -387,7 +417,7 @@ def send_email_report(smtp_server, smtp_port, smtp_user, smtp_pass, receivers, b
                     <tr style="background-color: #2b6cb0; color: #ffffff;">
                         <th style="padding: 12px; width: 40px;">#</th>
                         <th style="padding: 12px; width: 80px;">분야</th>
-                        <th style="padding: 12px;">입찰 공고명 & 자격 분석</th>
+                        <th style="padding: 12px;">입찰 공고명 & 사업책임기술인 분야</th>
                         <th style="padding: 12px; width: 140px;">수요기관</th>
                         <th style="padding: 12px; width: 150px; text-align: right;">추정가격 / 예산</th>
                         <th style="padding: 12px; width: 140px; text-align: center;">입찰마감일시</th>
@@ -438,7 +468,7 @@ def generate_web_dashboard(bids, bgn_date_str):
     <style>
         * {{ box-sizing: border-box; font-family: 'Pretendard', 'Apple SD Gothic Neo', sans-serif; }}
         body {{ background-color: #f4f6f9; color: #333; margin: 0; padding: 20px; }}
-        .container {{ max-width: 1250px; margin: 0 auto; background: #fff; border-radius: 12px; padding: 25px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); }}
+        .container {{ max-width: 1300px; margin: 0 auto; background: #fff; border-radius: 12px; padding: 25px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); }}
         header {{ border-bottom: 2px solid #2b6cb0; padding-bottom: 15px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; }}
         h1 {{ color: #1a365d; margin: 0; font-size: 24px; }}
         .info-bar {{ background: #ebf8ff; color: #2c5282; padding: 12px 18px; border-radius: 8px; margin-bottom: 20px; font-size: 14px; font-weight: 500; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; }}
@@ -456,8 +486,8 @@ def generate_web_dashboard(bids, bgn_date_str):
         .badge-servc {{ background-color: #ebf8ff; color: #2b6cb0; }}
         .badge-cnstwk {{ background-color: #feebc8; color: #c05621; }}
         
-        .struct-badge-yes {{ margin-top: 6px; background-color: #e6fffa; color: #234e52; border: 1px solid #b2f5ea; padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: 500; }}
-        .struct-badge-no {{ margin-top: 6px; color: #a0aec0; font-size: 11px; }}
+        .lead-badge {{ margin-top: 6px; background-color: #ebf8ff; color: #2c5282; border: 1px solid #bee3f8; padding: 5px 10px; border-radius: 6px; font-size: 12px; font-weight: 500; }}
+        .lead-field-name {{ font-weight: bold; color: #2b6cb0; background: #fff; padding: 2px 6px; border-radius: 4px; border: 1px solid #cbd5e0; margin-left: 4px; }}
 
         .price {{ color: #2c5282; font-weight: bold; text-align: right; }}
         .deadline {{ color: #e53e3e; font-size: 13px; font-family: monospace; text-align: center; }}
@@ -469,7 +499,7 @@ def generate_web_dashboard(bids, bgn_date_str):
 <body>
     <div class="container">
         <header>
-            <h1>🌉 조달청 나라장터 입찰공고 대시보드 (최근 24시간 기준)</h1>
+            <h1>🌉 조달청 나라장터 입찰공고 대시보드 (최근 24시간)</h1>
             <div style="font-size: 13px; color: #718096;">최종 업데이트: <strong>{datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}</strong></div>
         </header>
 
@@ -479,10 +509,15 @@ def generate_web_dashboard(bids, bgn_date_str):
         </div>
 
         <div class="controls">
-            <input type="text" id="searchInput" class="search-box" placeholder="공고명, 수요기관, 자격 문구 검색..." oninput="renderTable()">
-            <select id="structFilter" class="filter-select" onchange="renderTable()">
-                <option value="ALL">전체 자격 조건 보기</option>
-                <option value="STRUCT_ONLY">구조분야 기술인 명시 공고만 보기 (✅)</option>
+            <input type="text" id="searchInput" class="search-box" placeholder="공고명, 수요기관, 책임기술인 분야 검색..." oninput="renderTable()">
+            <select id="leadFilter" class="filter-select" onchange="renderTable()">
+                <option value="ALL">전체 책임기술인 분야 보기</option>
+                <option value="토목구조">토목구조 분야</option>
+                <option value="도로">도로·공항 분야</option>
+                <option value="안전진단">안전진단 분야</option>
+                <option value="수자원">수자원 분야</option>
+                <option value="토질">토질·지질 분야</option>
+                <option value="토목">토목 일반 분야</option>
             </select>
             <select id="domainFilter" class="filter-select" onchange="renderTable()">
                 <option value="ALL">전체 분야 보기</option>
@@ -501,7 +536,7 @@ def generate_web_dashboard(bids, bgn_date_str):
                 <tr>
                     <th style="width: 50px;">#</th>
                     <th style="width: 90px;">분야</th>
-                    <th>입찰 공고명 & 첨부파일 기술인 분석</th>
+                    <th>입찰 공고명 & 사업책임기술인 분야</th>
                     <th style="width: 170px;">수요기관</th>
                     <th style="width: 170px; text-align: right;">추정가격 (배정예산)</th>
                     <th style="width: 150px; text-align: center;">입찰마감일시</th>
@@ -529,22 +564,22 @@ def generate_web_dashboard(bids, bgn_date_str):
 
         function renderTable() {{
             const searchKw = document.getElementById('searchInput').value.trim().toLowerCase();
-            const structVal = document.getElementById('structFilter').value;
+            const leadVal = document.getElementById('leadFilter').value;
             const domainVal = document.getElementById('domainFilter').value;
             const sortVal = document.getElementById('sortSelect').value;
 
             let filtered = rawBids.filter(bid => {{
                 const title = (bid.bidNtceNm || '').toLowerCase();
                 const instt = (bid.dminsttNm || bid.ntceInsttNm || '').toLowerCase();
-                const structExc = (bid._struct_excerpt || '').toLowerCase();
+                const leadField = (bid._lead_field || '').toLowerCase();
+                const leadExc = (bid._lead_excerpt || '').toLowerCase();
                 const domain = bid._domain_kr || '';
-                const hasStruct = bid._struct_has || false;
 
-                const matchesSearch = title.includes(searchKw) || instt.includes(searchKw) || structExc.includes(searchKw);
+                const matchesSearch = title.includes(searchKw) || instt.includes(searchKw) || leadField.includes(searchKw) || leadExc.includes(searchKw);
                 const matchesDomain = (domainVal === 'ALL') || (domain === domainVal);
-                const matchesStruct = (structVal === 'ALL') || (structVal === 'STRUCT_ONLY' && hasStruct);
+                const matchesLead = (leadVal === 'ALL') || (leadField.includes(leadVal.toLowerCase()));
 
-                return matchesSearch && matchesDomain && matchesStruct;
+                return matchesSearch && matchesDomain && matchesLead;
             }});
 
             filtered.sort((a, b) => {{
@@ -560,7 +595,7 @@ def generate_web_dashboard(bids, bgn_date_str):
 
             const tbody = document.getElementById('tableBody');
             if (filtered.length === 0) {{
-                tbody.innerHTML = `<tr><td colspan="7" style="text-align: center; padding: 40px; color: #a0aec0;">최근 24시간 동안 조건에 맞는 신규 입찰 공고가 없습니다.</td></tr>`;
+                tbody.innerHTML = `<tr><td colspan="7" style="text-align: center; padding: 40px; color: #a0aec0;">검색 조건에 맞는 공고가 없습니다.</td></tr>`;
                 return;
             }}
 
@@ -571,12 +606,10 @@ def generate_web_dashboard(bids, bgn_date_str):
                 const priceStr = formatPrice(bid.presmptPrce || bid.asignBdgtAmt);
                 const detailUrl = bid.bidNtceDtlUrl || `https://www.g2b.go.kr/link/PNPE027_01/single/?bidPbancNo=${{bid.bidNtceNo}}&bidPbancOrd=${{bid.bidNtceOrd || '000'}}`;
                 
-                const hasStruct = bid._struct_has || false;
-                const structExc = bid._struct_excerpt || '';
+                const leadField = bid._lead_field || '서류참조';
+                const leadExc = bid._lead_excerpt || '첨부 서류 직접 확인 필요';
 
-                const structHtml = hasStruct 
-                    ? `<div class="struct-badge-yes"><strong>✅ 구조분야 기술인 요구:</strong> "${{structExc}}..."</div>`
-                    : `<div class="struct-badge-no">🔍 구조분야 자격: 첨부 서류 직접 확인 필요</div>`;
+                const leadHtml = `<div class="lead-badge">👷 <strong>사업책임기술인 분야:</strong> <span class="lead-field-name">${{leadField}}</span> <span style="color:#4a5568; margin-left:6px; font-size:11px;">("${{leadExc}}...")</span></div>`;
 
                 return `
                     <tr>
@@ -585,7 +618,7 @@ def generate_web_dashboard(bids, bgn_date_str):
                         <td>
                             <a href="${{detailUrl}}" target="_blank" style="color: #2b6cb0; text-decoration: none; font-weight: bold;">${{bid.bidNtceNm}}</a>
                             <div style="color: #718096; font-size: 12px; margin-top: 4px;">공고번호: ${{bid.bidNtceNo}} | 계약방법: ${{bid.cntrctCnclsMthdNm || '미지정'}}</div>
-                            ${{structHtml}}
+                            ${{leadHtml}}
                         </td>
                         <td style="color: #4a5568;">${{insttNm}}</td>
                         <td class="price">${{priceStr}}</td>
@@ -605,10 +638,10 @@ def generate_web_dashboard(bids, bgn_date_str):
 
     with open('index.html', 'w', encoding='utf-8') as f:
         f.write(html_content)
-    print("✅ 웹 대시보드(index.html) 최근 24시간 기준 생성 완료!")
+    print("✅ 웹 대시보드(index.html) 사업책임기술인 분야 반영 생성 완료!")
 
 def main():
-    print("🚀 조달청 나라장터 [최근 24시간 기준 교량/공사 1억 이상 + 첨부파일 구조기술자 분석] 시작")
+    print("🚀 조달청 나라장터 [최근 24시간 교량/공사 1억 이상 + 사업책임기술인 분야 파싱] 시작")
 
     service_key = get_env_or_default('SERVICE_KEY', load_default_service_key())
     bot_token = get_env_or_default('TELEGRAM_BOT_TOKEN')
@@ -625,7 +658,6 @@ def main():
     exclude_keywords = ['학교', '초등', '고등']
     min_price_threshold = 100000000
 
-    # 현재 실행 시각 기준 정확히 24시간 전~현재 시각 계산
     now = datetime.datetime.now()
     start_date = now - datetime.timedelta(hours=24)
     bgn_dt = start_date.strftime('%Y%m%d%H%M')
@@ -670,14 +702,15 @@ def main():
     print(f"\n🎯 최근 24시간 대상 공고 수: {len(all_bids)}건")
 
     if all_bids:
-        print("📄 첨부파일(HWP, HWPX, PDF) 다운로드 및 구조분야 책임기술인 요건 자동 분석 중...")
+        print("📄 첨부파일(HWP, HWPX, PDF) 자동 파싱하여 사업책임기술인 분야 추출 중...")
         for idx, bid in enumerate(all_bids, 1):
             print(f"   [{idx}/{len(all_bids)}] {bid.get('bidNtceNm')[:30]}... 분석 중")
-            has_struct, excerpt = analyze_structural_engineer(bid)
+            has_struct, struct_exc, lead_field, lead_exc = analyze_attachments(bid)
             bid['_struct_has'] = has_struct
-            bid['_struct_excerpt'] = excerpt
-            if has_struct:
-                print(f"      👉 ✅ 구조분야 자격 명시 확인됨: {excerpt[:50]}")
+            bid['_struct_excerpt'] = struct_exc
+            bid['_lead_field'] = lead_field
+            bid['_lead_excerpt'] = lead_exc
+            print(f"      👉 👷 사업책임기술인 분야: {lead_field}")
 
     generate_web_dashboard(all_bids, bgn_date_str)
 
