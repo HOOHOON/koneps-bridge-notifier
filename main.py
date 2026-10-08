@@ -313,10 +313,10 @@ def analyze_strict_lead_pm(item):
                             continue
                         pm_lines.append(re.sub(r'\s+', ' ', line_clean)[:120])
 
-    stage = item.get('_stage', '공고')
+    stage = item.get('_stage', '입찰공고')
 
     if not pm_lines:
-        return False, f"미확인 ({stage} 서류 직접 확인 필요)", "첨부 서류 확인 필요"
+        return False, f"미확인 ({stage} 서류 참조)", "첨부 서류 확인 필요"
 
     detected_field = "미확인"
     is_struct_pm = False
@@ -335,17 +335,20 @@ def analyze_strict_lead_pm(item):
     return is_struct_pm, detected_field, excerpt
 
 def build_telegram_messages(bids, bgn_date_str):
+    c_bid = sum(1 for b in bids if b.get('_stage') == '입찰공고')
+    c_prespec = sum(1 for b in bids if b.get('_stage') == '사전규격')
+    c_orderplan = sum(1 for b in bids if b.get('_stage') == '발주계획')
+
     header = (
         f"📢 <b>[조달청 나라장터 교량/다리 통합 48시간 리포트]</b>\n"
         f"📅 수집 기간: {bgn_date_str}\n"
-        f"🔍 수집 대상: 입찰공고 · 사전규격공개 · 발주계획\n"
-        f"💰 가격 조건: 1억 원 이상 (또는 발주계획)\n"
-        f"📊 최근 48시간 신규 <b>{len(bids)}건</b>의 공고/계획이 등록되었습니다.\n"
+        f"💰 가격 조건: <b>2억 원 이상</b> (발주계획 포함)\n"
+        f"📊 <b>단계별 요약</b>: 🔵 입찰공고 <b>{c_bid}건</b> | 🟡 사전규격 <b>{c_prespec}건</b> | 🟣 발주계획 <b>{c_orderplan}건</b> (총 <b>{len(bids)}건</b>)\n"
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
     )
 
     if not bids:
-        return [header + "지난 48시간 동안 조건에 맞는 신규 입찰 공고/계획이 없습니다. 😊"]
+        return [header + "지난 48시간 동안 조건(2억 이상)에 맞는 신규 입찰 공고/계획이 없습니다. 😊"]
 
     messages = []
     current_msg = header
@@ -364,7 +367,12 @@ def build_telegram_messages(bids, bgn_date_str):
         lead_field = bid.get('_lead_field', '미확인')
         lead_exc = bid.get('_lead_excerpt', '')
 
-        stage_emoji = "🔵" if stage == "입찰공고" else "🟡" if stage == "사전규격" else "🟣"
+        if stage == "입찰공고":
+            stage_badge = "🔵 [입찰공고]"
+        elif stage == "사전규격":
+            stage_badge = "🟡 [사전규격공개]"
+        else:
+            stage_badge = "🟣 [발주계획현황]"
 
         if is_struct_pm:
             pm_tag = f"<b>🎯 [구조부 주관 가능] 사업책임기술인: {lead_field}</b>"
@@ -372,10 +380,11 @@ def build_telegram_messages(bids, bgn_date_str):
             pm_tag = f"<b>ℹ️ [타 분야 주관] 사업책임기술인: {lead_field}</b>"
 
         item_str = (
-            f"<b>{idx}. {stage_emoji} [{stage}] [{domain_kr}] {title}</b>\n"
+            f"<b>{idx}. {stage_badge} [{domain_kr}] {title}</b>\n"
+            f"• <b>구분 (단계)</b>: {stage_badge}\n"
             f"• <b>번호/ID</b>: {bid_no}\n"
             f"• <b>수요기관</b>: {instt_nm}\n"
-            f"• <b>추정가격/예산</b>: {price_str}\n"
+            f"• <b>추정가격/예산</b>: <b>{price_str}</b>\n"
             f"• <b>일시/기한</b>: <code>{date_str}</code>\n"
             f"• <b>사업책임기술인 분석</b>: {pm_tag}\n"
             f"  <i>({lead_exc[:60]}...)</i>\n"
@@ -384,7 +393,7 @@ def build_telegram_messages(bids, bgn_date_str):
 
         if len(current_msg) + len(item_str) > 3800:
             messages.append(current_msg)
-            current_msg = f"<b>[입찰/사전규격/발주계획 알림 (이어서)]</b>\n━━━━━━━━━━━━━━━━━━━━\n\n" + item_str
+            current_msg = f"<b>[입찰공고/사전규격/발주계획 알림 (이어서)]</b>\n━━━━━━━━━━━━━━━━━━━━\n\n" + item_str
         else:
             current_msg += item_str
 
@@ -430,7 +439,11 @@ def send_email_report(smtp_server, smtp_port, smtp_user, smtp_pass, receivers, b
     if not receiver_list:
         return False
 
-    subject = f"[조달청 나라장터] 교량/다리 통합 48시간 리포트 (입찰공고·사전규격·발주계획) ({bgn_date_str}) - 총 {len(bids)}건"
+    c_bid = sum(1 for b in bids if b.get('_stage') == '입찰공고')
+    c_prespec = sum(1 for b in bids if b.get('_stage') == '사전규격')
+    c_orderplan = sum(1 for b in bids if b.get('_stage') == '발주계획')
+
+    subject = f"[조달청 나라장터] 교량/다리 2억 이상 통합 리포트 (입찰공고 {c_bid}건 · 사전규격 {c_prespec}건 · 발주계획 {c_orderplan}건)"
 
     rows_html = ""
     for idx, bid in enumerate(bids, 1):
@@ -448,11 +461,11 @@ def send_email_report(smtp_server, smtp_port, smtp_user, smtp_pass, receivers, b
         lead_exc = bid.get('_lead_excerpt', '')
 
         if stage == '입찰공고':
-            stage_badge = '<span style="background-color:#ebf8ff; color:#2b6cb0; border:1px solid #bee3f8; padding:3px 8px; border-radius:4px; font-weight:bold; font-size:12px;">🔵 입찰공고</span>'
+            stage_badge = '<span style="background-color:#ebf8ff; color:#2b6cb0; border:1px solid #90cdf4; padding:4px 8px; border-radius:4px; font-weight:bold; font-size:12px;">🔵 입찰공고</span>'
         elif stage == '사전규격':
-            stage_badge = '<span style="background-color:#fefcbf; color:#b7791f; border:1px solid #f6e05e; padding:3px 8px; border-radius:4px; font-weight:bold; font-size:12px;">🟡 사전규격</span>'
+            stage_badge = '<span style="background-color:#fefcbf; color:#975a16; border:1px solid #f6e05e; padding:4px 8px; border-radius:4px; font-weight:bold; font-size:12px;">🟡 사전규격공개</span>'
         else:
-            stage_badge = '<span style="background-color:#faf5ff; color:#6b46c1; border:1px solid #e9d8fd; padding:3px 8px; border-radius:4px; font-weight:bold; font-size:12px;">🟣 발주계획</span>'
+            stage_badge = '<span style="background-color:#faf5ff; color:#6b46c1; border:1px solid #d6bcfa; padding:4px 8px; border-radius:4px; font-weight:bold; font-size:12px;">🟣 발주계획현황</span>'
 
         if is_struct_pm:
             pm_badge = f'<div style="margin-top:6px; background-color:#c6f6d5; color:#22543d; border:1px solid #9ae6b4; padding:5px 10px; border-radius:4px; font-size:12px; font-weight:bold;">🎯 [구조부 주관 가능] 사업책임기술인 분야: {lead_field} <span style="font-size:11px; font-weight:normal;">({lead_exc[:45]}...)</span></div>'
@@ -470,7 +483,7 @@ def send_email_report(smtp_server, smtp_port, smtp_user, smtp_pass, receivers, b
             </td>
             <td style="padding: 12px;">
                 <a href="{detail_url}" target="_blank" style="color: #2b6cb0; text-decoration: none; font-weight: bold;">{title}</a>
-                <div style="color: #718096; font-size: 12px; margin-top: 4px;">번호/ID: {bid_no}</div>
+                <div style="color: #718096; font-size: 12px; margin-top: 4px;">공고/계획 ID: {bid_no}</div>
                 {pm_badge}
             </td>
             <td style="padding: 12px; color: #2d3748; font-weight: 500;">{instt_nm}</td>
@@ -491,21 +504,24 @@ def send_email_report(smtp_server, smtp_port, smtp_user, smtp_pass, receivers, b
     <body style="font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; background-color: #f7fafc; margin: 0; padding: 20px;">
         <div style="max-width: 1100px; margin: 0 auto; background-color: #ffffff; padding: 30px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); border: 1px solid #e2e8f0;">
             <h2 style="color: #1a365d; margin-top: 0; border-bottom: 2px solid #3182ce; padding-bottom: 12px;">
-                🌉 조달청 나라장터 교량/다리 통합 48시간 리포트
+                🌉 조달청 나라장터 교량/다리 통합 48시간 리포트 (2억 원 이상)
             </h2>
-            <div style="background-color: #ebf8ff; border-left: 4px solid #3182ce; padding: 12px 16px; margin-bottom: 24px; border-radius: 4px; color: #2c5282;">
-                <strong>📅 수집 기간 (최근 48시간):</strong> {bgn_date_str} | 
-                <strong>🔍 대상 단계:</strong> 입찰공고, 사전규격공개, 발주계획 | 
-                <strong>💰 최소 금액:</strong> 1억 원 이상 | 
-                <strong>📊 수집 건수:</strong> <span style="font-size:18px; font-weight:bold; color:#e53e3e;">{len(bids)}건</span>
+            <div style="background-color: #ebf8ff; border-left: 4px solid #3182ce; padding: 14px 18px; margin-bottom: 24px; border-radius: 6px; color: #2c5282;">
+                <strong>📅 수집 기간 (최근 48시간):</strong> {bgn_date_str}<br>
+                <strong>💰 최소 금액 조건:</strong> <span style="font-weight:bold; color:#e53e3e;">2억 원 이상</span> (발주계획 포함)<br>
+                <strong>📊 수집 건수:</strong> 
+                <span style="font-size:15px; font-weight:bold; color:#2b6cb0;">🔵 입찰공고 {c_bid}건</span> | 
+                <span style="font-size:15px; font-weight:bold; color:#b7791f;">🟡 사전규격 {c_prespec}건</span> | 
+                <span style="font-size:15px; font-weight:bold; color:#6b46c1;">🟣 발주계획 {c_orderplan}건</span>
+                (총 <strong style="font-size:16px; color:#e53e3e;">{len(bids)}건</strong>)
             </div>
 
             <table style="width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 14px;">
                 <thead>
                     <tr style="background-color: #2b6cb0; color: #ffffff;">
                         <th style="padding: 12px; width: 35px;">#</th>
-                        <th style="padding: 12px; width: 90px;">단계</th>
-                        <th style="padding: 12px; width: 80px;">분야</th>
+                        <th style="padding: 12px; width: 110px;">구분 (단계)</th>
+                        <th style="padding: 12px; width: 75px;">분야</th>
                         <th style="padding: 12px;">공고/사업명 & 사업책임기술인 (TL) 주관 분야 분석</th>
                         <th style="padding: 12px; width: 140px;">수요기관</th>
                         <th style="padding: 12px; width: 140px; text-align: right;">추정가격 / 예산</th>
@@ -514,12 +530,12 @@ def send_email_report(smtp_server, smtp_port, smtp_user, smtp_pass, receivers, b
                     </tr>
                 </thead>
                 <tbody>
-                    {rows_html if bids else '<tr><td colspan="8" style="padding: 30px; text-align: center; color: #a0aec0;">지난 48시간 동안 조건에 맞는 신규 입찰 공고/계획이 없습니다.</td></tr>'}
+                    {rows_html if bids else '<tr><td colspan="8" style="padding: 30px; text-align: center; color: #a0aec0;">지난 48시간 동안 조건(2억 이상)에 맞는 신규 입찰 공고/계획이 없습니다.</td></tr>'}
                 </tbody>
             </table>
 
             <div style="margin-top: 30px; padding-top: 15px; border-top: 1px solid #e2e8f0; color: #a0aec0; font-size: 12px; text-align: center;">
-                본 이메일은 GitHub Actions 자동화 시스템에 의해 수신인({', '.join(receiver_list)})에게 매일 아침 발송됩니다.
+                본 이메일은 GitHub Actions 자동화 시스템에 의해 수신인({', '.join(receiver_list)})에게 매일 발송됩니다.
             </div>
         </div>
     </body>
@@ -548,22 +564,35 @@ def send_email_report(smtp_server, smtp_port, smtp_user, smtp_pass, receivers, b
 def generate_web_dashboard(bids, bgn_date_str):
     data_json = json.dumps(bids, ensure_ascii=False)
     
+    c_bid = sum(1 for b in bids if b.get('_stage') == '입찰공고')
+    c_prespec = sum(1 for b in bids if b.get('_stage') == '사전규격')
+    c_orderplan = sum(1 for b in bids if b.get('_stage') == '발주계획')
+
     html_content = f"""<!DOCTYPE html>
 <html lang="ko">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>조달청 나라장터 교량/다리 통합 대시보드</title>
+    <title>조달청 나라장터 교량/다리 통합 대시보드 (2억 이상)</title>
     <style>
         * {{ box-sizing: border-box; font-family: 'Pretendard', 'Apple SD Gothic Neo', sans-serif; }}
         body {{ background-color: #f4f6f9; color: #333; margin: 0; padding: 20px; }}
-        .container {{ max-width: 1350px; margin: 0 auto; background: #fff; border-radius: 12px; padding: 25px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); }}
-        header {{ border-bottom: 2px solid #2b6cb0; padding-bottom: 15px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; }}
+        .container {{ max-width: 1400px; margin: 0 auto; background: #fff; border-radius: 12px; padding: 25px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); }}
+        header {{ border-bottom: 2px solid #2b6cb0; padding-bottom: 15px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; }}
         h1 {{ color: #1a365d; margin: 0; font-size: 24px; }}
-        .info-bar {{ background: #ebf8ff; color: #2c5282; padding: 12px 18px; border-radius: 8px; margin-bottom: 20px; font-size: 14px; font-weight: 500; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; }}
+        .sub-header {{ font-size: 13px; color: #718096; }}
         
+        .info-bar {{ background: #ebf8ff; color: #2c5282; padding: 14px 18px; border-radius: 8px; margin-bottom: 20px; font-size: 14px; font-weight: 500; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; }}
+        
+        .stat-group {{ display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }}
+        .stat-card {{ padding: 6px 12px; border-radius: 6px; font-size: 13px; font-weight: bold; border: 1px solid transparent; display: flex; align-items: center; gap: 5px; }}
+        .stat-card-bid {{ background-color: #eef6ff; color: #2b6cb0; border-color: #bee3f8; }}
+        .stat-card-prespec {{ background-color: #fffdf0; color: #975a16; border-color: #f6e05e; }}
+        .stat-card-orderplan {{ background-color: #fcfaff; color: #6b46c1; border-color: #e9d8fd; }}
+        .stat-card-total {{ background-color: #feefef; color: #e53e3e; border-color: #feb2b2; }}
+
         .controls {{ display: flex; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; }}
-        .search-box {{ flex: 1; min-width: 220px; padding: 10px 16px; border: 1px solid #cbd5e0; border-radius: 6px; font-size: 14px; outline: none; }}
+        .search-box {{ flex: 1; min-width: 240px; padding: 10px 16px; border: 1px solid #cbd5e0; border-radius: 6px; font-size: 14px; outline: none; }}
         .filter-select {{ padding: 10px 14px; border: 1px solid #cbd5e0; border-radius: 6px; font-size: 14px; background: #fff; cursor: pointer; }}
         
         table {{ width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 14px; }}
@@ -571,10 +600,10 @@ def generate_web_dashboard(bids, bgn_date_str):
         td {{ padding: 12px; border-bottom: 1px solid #e2e8f0; vertical-align: middle; }}
         tr:hover {{ background-color: #f7fafc; }}
 
-        .badge {{ display: inline-block; padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; text-align: center; }}
-        .badge-stage-bid {{ background-color: #ebf8ff; color: #2b6cb0; border: 1px solid #bee3f8; }}
-        .badge-stage-prespec {{ background-color: #fefcbf; color: #b7791f; border: 1px solid #f6e05e; }}
-        .badge-stage-orderplan {{ background-color: #faf5ff; color: #6b46c1; border: 1px solid #e9d8fd; }}
+        .badge {{ display: inline-block; padding: 5px 10px; border-radius: 6px; font-size: 12px; font-weight: bold; text-align: center; white-space: nowrap; }}
+        .badge-stage-bid {{ background-color: #ebf8ff; color: #2b6cb0; border: 1px solid #90cdf4; }}
+        .badge-stage-prespec {{ background-color: #fefcbf; color: #975a16; border: 1px solid #f6e05e; }}
+        .badge-stage-orderplan {{ background-color: #faf5ff; color: #6b46c1; border: 1px solid #d6bcfa; }}
         
         .badge-servc {{ background-color: #edf2f7; color: #4a5568; }}
         .badge-cnstwk {{ background-color: #feebc8; color: #c05621; }}
@@ -587,25 +616,33 @@ def generate_web_dashboard(bids, bgn_date_str):
         .deadline {{ color: #e53e3e; font-size: 13px; font-family: monospace; text-align: center; }}
         .btn-link {{ background-color: #3182ce; color: white; padding: 6px 12px; text-decoration: none; border-radius: 4px; font-size: 12px; font-weight: 500; display: inline-block; transition: background 0.2s; }}
         .btn-link:hover {{ background-color: #2b6cb0; }}
-        .count-tag {{ background: #e53e3e; color: white; padding: 2px 8px; border-radius: 12px; font-weight: bold; margin-left: 6px; }}
+        .title-tag {{ display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: bold; margin-right: 6px; vertical-align: middle; }}
     </style>
 </head>
 <body>
     <div class="container">
         <header>
-            <h1>🌉 조달청 나라장터 교량/다리 통합 대시보드 (최근 48시간)</h1>
+            <div>
+                <h1>🌉 조달청 나라장터 교량/다리 통합 대시보드</h1>
+                <div class="sub-header">수집 대상: <strong>입찰공고 · 사전규격공개 · 발주계획 (최근 48시간 / 2억 원 이상)</strong></div>
+            </div>
             <div style="font-size: 13px; color: #718096;">최종 업데이트: <strong>{datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}</strong></div>
         </header>
 
         <div class="info-bar">
-            <div>📌 <strong>수집 기간 (최근 48시간):</strong> {bgn_date_str} | <strong>대상 단계:</strong> 입찰공고, 사전규격공개, 발주계획 | <strong>조건:</strong> 1억 원 이상</div>
-            <div>수집된 항목: <span class="count-tag" id="totalCount">{len(bids)}</span>건</div>
+            <div>📌 <strong>수집 기간:</strong> {bgn_date_str} | <strong>최소 금액:</strong> <span style="color:#e53e3e; font-weight:bold;">2억 원 이상</span></div>
+            <div class="stat-group">
+                <div class="stat-card stat-card-bid">🔵 입찰공고 <span>{c_bid}건</span></div>
+                <div class="stat-card stat-card-prespec">🟡 사전규격 <span>{c_prespec}건</span></div>
+                <div class="stat-card stat-card-orderplan">🟣 발주계획 <span>{c_orderplan}건</span></div>
+                <div class="stat-card stat-card-total">🔥 전체 <span id="totalCount">{len(bids)}건</span></div>
+            </div>
         </div>
 
         <div class="controls">
             <input type="text" id="searchInput" class="search-box" placeholder="공고/사업명, 수요기관, 사업책임기술인 검색..." oninput="renderTable()">
             <select id="stageFilter" class="filter-select" onchange="renderTable()">
-                <option value="ALL">전체 단계 보기 (사전규격+발주계획+입찰공고)</option>
+                <option value="ALL">전체 구분(단계) 보기 (사전규격+발주계획+입찰공고)</option>
                 <option value="사전규격">🟡 사전규격공개만 보기</option>
                 <option value="발주계획">🟣 발주계획만 보기</option>
                 <option value="입찰공고">🔵 입찰공고만 보기</option>
@@ -631,10 +668,10 @@ def generate_web_dashboard(bids, bgn_date_str):
             <thead>
                 <tr>
                     <th style="width: 40px;">#</th>
-                    <th style="width: 95px;">단계</th>
+                    <th style="width: 115px;">구분 (단계)</th>
                     <th style="width: 80px;">분야</th>
                     <th>공고/사업명 & 사업책임기술인(TL) 주관 분야 분석</th>
-                    <th style="width: 160px;">수요기관</th>
+                    <th style="width: 170px;">수요기관</th>
                     <th style="width: 160px; text-align: right;">추정가격 / 예산</th>
                     <th style="width: 140px; text-align: center;">일시/마감일</th>
                     <th style="width: 85px; text-align: center;">상세보기</th>
@@ -700,16 +737,21 @@ def generate_web_dashboard(bids, bgn_date_str):
 
             const tbody = document.getElementById('tableBody');
             if (filtered.length === 0) {{
-                tbody.innerHTML = `<tr><td colspan="8" style="text-align: center; padding: 40px; color: #a0aec0;">최근 48시간 동안 조건에 맞는 입찰 공고/사전규격/발주계획이 없습니다.</td></tr>`;
+                tbody.innerHTML = `<tr><td colspan="8" style="text-align: center; padding: 40px; color: #a0aec0;">최근 48시간 동안 조건(2억 이상)에 맞는 공고/사전규격/발주계획이 없습니다.</td></tr>`;
                 return;
             }}
 
             tbody.innerHTML = filtered.map((bid, idx) => {{
                 const stage = bid._stage || '입찰공고';
                 let stageBadgeClass = 'badge-stage-bid';
-                let stageSymbol = '🔵';
-                if (stage === '사전규격') {{ stageBadgeClass = 'badge-stage-prespec'; stageSymbol = '🟡'; }}
-                else if (stage === '발주계획') {{ stageBadgeClass = 'badge-stage-orderplan'; stageSymbol = '🟣'; }}
+                let stageLabel = '🔵 입찰공고';
+                if (stage === '사전규격') {{ 
+                    stageBadgeClass = 'badge-stage-prespec'; 
+                    stageLabel = '🟡 사전규격공개'; 
+                }} else if (stage === '발주계획') {{ 
+                    stageBadgeClass = 'badge-stage-orderplan'; 
+                    stageLabel = '🟣 발주계획현황'; 
+                }}
 
                 const domainKr = bid._domain_kr || '기타';
                 const domainBadgeClass = domainKr === '기술용역' ? 'badge-servc' : 'badge-cnstwk';
@@ -728,11 +770,11 @@ def generate_web_dashboard(bids, bgn_date_str):
                 return `
                     <tr>
                         <td style="text-align: center; color: #718096; font-weight: bold;">${{idx + 1}}</td>
-                        <td style="text-align: center;"><span class="badge ${{stageBadgeClass}}">${{stageSymbol}} ${{stage}}</span></td>
+                        <td style="text-align: center;"><span class="badge ${{stageBadgeClass}}">${{stageLabel}}</span></td>
                         <td style="text-align: center;"><span class="badge ${{domainBadgeClass}}">${{domainKr}}</span></td>
                         <td>
                             <a href="${{detailUrl}}" target="_blank" style="color: #2b6cb0; text-decoration: none; font-weight: bold;">${{bid._title}}</a>
-                            <div style="color: #718096; font-size: 12px; margin-top: 4px;">번호/ID: ${{bid._id || 'N/A'}}</div>
+                            <div style="color: #718096; font-size: 12px; margin-top: 4px;">공고/계획 ID: ${{bid._id || 'N/A'}}</div>
                             ${{pmHtml}}
                         </td>
                         <td style="color: #4a5568;">${{insttNm}}</td>
@@ -753,10 +795,10 @@ def generate_web_dashboard(bids, bgn_date_str):
 
     with open('index.html', 'w', encoding='utf-8') as f:
         f.write(html_content)
-    print("✅ 웹 대시보드(index.html) 최근 48시간 기준 생성 완료!")
+    print("✅ 웹 대시보드(index.html) 2억 이상 수집 완료!")
 
 def main():
-    print("🚀 조달청 나라장터 [최근 48시간 교량/다리 1억 이상 (입찰공고·사전규격·발주계획) + 사업책임기술인(TL) 분석] 시작")
+    print("🚀 조달청 나라장터 [최근 48시간 교량/다리 2억 이상 (입찰공고·사전규격·발주계획) + 사업책임기술인(TL) 분석] 시작")
 
     service_key = get_env_or_default('SERVICE_KEY', load_default_service_key())
     bot_token = get_env_or_default('TELEGRAM_BOT_TOKEN')
@@ -769,7 +811,7 @@ def main():
     email_receivers = get_env_or_default('EMAIL_RECEIVERS', 'jh_moon@dohwa.co.kr, moonji8203@gmail.com')
 
     search_keywords = ['교량', '다리', '교']
-    min_price_threshold = 100000000
+    min_price_threshold = 200000000  # 2억 원 이상
 
     # 48시간 (2일) 기준 조회
     search_days = int(get_env_or_default('SEARCH_DAYS', '2'))
@@ -781,10 +823,11 @@ def main():
     bgn_date_str = f"{start_date.strftime('%Y-%m-%d %H:%M')} ~ {now.strftime('%Y-%m-%d %H:%M')}"
 
     print(f"📌 수집 기간: {bgn_date_str} ({bgn_dt} ~ {end_dt})")
+    print(f"💰 최소 금액 조건: {min_price_threshold / 100000000:.0f}억 원 이상")
 
     all_items_dict = {}
 
-    # 1. 입찰공고 (BidPublicInfoService) 수집
+    # 1. 입찰공고 (BidPublicInfoService) 수집 및 1차 필터링
     print("\n🔎 [1/3] 입찰공고 (BidPublicInfoService) 수집 중...")
     for op_name, domain_kr in [("getBidPblancListInfoServcPPSSrch", "기술용역"), ("getBidPblancListInfoCnstwkPPSSrch", "공사")]:
         for kw in search_keywords:
@@ -795,6 +838,7 @@ def main():
                 asign_bdgt = safe_int(item.get('asignBdgtAmt'))
                 price = max(presmpt_prce, asign_bdgt)
 
+                # 2억 이상 조건 및 교량 명칭 필터링
                 if price < min_price_threshold:
                     continue
                 if not is_target_bridge_title(title):
@@ -813,7 +857,7 @@ def main():
                     item['_date'] = item.get('bidClseDt') or item.get('bidNtceDtm') or ''
                     all_items_dict[key] = item
 
-    # 2. 사전규격공개 (HrcspSsstndrdInfoService) 수집
+    # 2. 사전규격공개 (HrcspSsstndrdInfoService) 수집 및 1차 필터링
     print("\n🔎 [2/3] 사전규격공개 (HrcspSsstndrdInfoService) 수집 중...")
     for op_name, domain_kr in [("getPublicPrcureThngInfoServcPPSSrch", "기술용역"), ("getPublicPrcureThngInfoCnstwkPPSSrch", "공사")]:
         items = fetch_pre_spec(service_key, op_name, bgn_dt, end_dt)
@@ -821,6 +865,7 @@ def main():
             title = (item.get('prdctClsfcNoNm') or item.get('prprtnNm') or '').strip()
             price = safe_int(item.get('asignBdgtAmt'))
 
+            # 2억 이상 조건 및 교량 명칭 필터링
             if price < min_price_threshold:
                 continue
             if not is_target_bridge_title(title):
@@ -839,7 +884,7 @@ def main():
                 item['_date'] = item.get('opninRgstClseDt') or item.get('rgstDt') or ''
                 all_items_dict[key] = item
 
-    # 3. 발주계획 (OrderPlanSttusService) 수집
+    # 3. 발주계획 (OrderPlanSttusService) 수집 및 1차 필터링
     print("\n🔎 [3/3] 발주계획 (OrderPlanSttusService) 수집 중...")
     for op_name, domain_kr in [("getOrderPlanSttusListServcPPSSrch", "기술용역"), ("getOrderPlanSttusListCnstwkPPSSrch", "공사")]:
         for kw in search_keywords:
@@ -851,6 +896,9 @@ def main():
                 p3 = safe_int(item.get('sumOrderAmt'))
                 price = max(p1, p2, p3)
 
+                # 금액이 지정된 경우 2억 이상 필터링 (미지정 0원인 발주계획은 포함)
+                if price > 0 and price < min_price_threshold:
+                    continue
                 if not is_target_bridge_title(title):
                     continue
 
@@ -872,10 +920,11 @@ def main():
     all_bids = list(all_items_dict.values())
     all_bids.sort(key=lambda x: safe_int(x.get('_price')), reverse=True)
 
-    print(f"\n🎯 최근 {search_days*24}시간 교량/다리 관련 수집 완료: 총 {len(all_bids)}건 (입찰공고·사전규격·발주계획)")
+    print(f"\n🎯 [필터링 완료] 최근 {search_days*24}시간 교량/다리 2억 이상 통과 공고: 총 {len(all_bids)}건 (입찰공고·사전규격·발주계획)")
 
+    # 🔥 [필터링 통과한 대상에 대해서만 사업책임기술인 분석 실행]
     if all_bids:
-        print("📄 첨부파일(HWP, HWPX, PDF) 자동 파싱하여 사업책임기술인(TL/총괄) 주관분야 분석 중...")
+        print("\n📄 [필터링 통과 대상] 첨부파일(HWP, HWPX, PDF) 파싱하여 사업책임기술인(TL/총괄) 분야 분석 중...")
         for idx, bid in enumerate(all_bids, 1):
             title_disp = bid.get('_title', '')[:30]
             stage_disp = bid.get('_stage', '')
