@@ -1,0 +1,6 @@
+데이터포맷
+JSON+XML
+End Point
+https://apis.data.go.kr/1230000/ad/BidPublicInfoService
+일반 인증키
+3f088232ed6232e3ce3362cc35d4ea291f47f1c9bfe102498dedefc05341f6aa

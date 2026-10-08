@@ -1,0 +1,52 @@
+name: Daily KONEPS Bridge Bid Notifier
+
+on:
+  schedule:
+    # UTC 기준 23:30 (한국 시간 기준 매일 아침 08:30 실행)
+    - cron: '30 23 * * *'
+  workflow_dispatch: # GitHub 웹 화면에서 수동 실행 버튼 제공
+
+# GitHub Pages 배포 권한 설정
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  notify-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Run KONEPS Notifier
+        env:
+          SERVICE_KEY: ${{ secrets.SERVICE_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          EMAIL_RECEIVERS: "jh_moon@dohwa.co.kr, moonji8203@gmail.com"
+          SEARCH_DAYS: '2'
+        run: |
+          python main.py
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+
+      - name: Upload artifact for GitHub Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: '.'
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
