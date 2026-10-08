@@ -6,24 +6,34 @@ import datetime
 import urllib.parse
 import urllib.request
 import smtplib
+import zipfile
+import zlib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+
+# HWP / PDF 파싱용 라이브러리 (체크)
+try:
+    import olefile
+except ImportError:
+    olefile = None
+
+try:
+    import pypdf
+except ImportError:
+    pypdf = None
 
 # UTF-8 출력 설정
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8')
 
-# API 기본 EndPoint
 BASE_URL = "https://apis.data.go.kr/1230000/ad/BidPublicInfoService"
 
-# 분야별 오퍼레이션 매핑
 DOMAIN_OPERATIONS = {
     "Servc": ("getBidPblancListInfoServcPPSSrch", "기술용역"),
     "Cnstwk": ("getBidPblancListInfoCnstwkPPSSrch", "공사"),
 }
 
 def load_default_service_key():
-    """로컬 txt 파일에서 API 키를 읽어오는 헬퍼 함수"""
     txt_files = [f for f in os.listdir('.') if f.endswith('.txt')]
     for tf in txt_files:
         try:
@@ -42,11 +52,10 @@ def get_env_or_default(key, default=""):
     return val if val else default
 
 def fetch_bids(service_key, op_name, keyword, bgn_dt, end_dt):
-    """나라장터 Open API 호출"""
     params = {
         'serviceKey': service_key,
         'type': 'json',
-        'inqryDiv': '1',  # 1: 공고게시일시 기준
+        'inqryDiv': '1',
         'inqryBgnDt': bgn_dt,
         'inqryEndDt': end_dt,
         'numOfRows': '100',
@@ -77,7 +86,6 @@ def fetch_bids(service_key, op_name, keyword, bgn_dt, end_dt):
         return []
 
 def format_price(amount_str):
-    """금액 포맷팅 (원 -> 억/만원 단위 변환)"""
     if not amount_str:
         return "미지정"
     try:
@@ -92,26 +100,127 @@ def format_price(amount_str):
         return str(amount_str)
 
 def is_target_bridge_title(title):
-    """
-    '교량', '다리', 'OO교' (예: 학산교, 태봉2교, 삼산교 등) 단어 정규식 감지.
-    단, '교육', '교체', '교류' 등의 오탐 방지 로직 포함.
-    """
     if '교량' in title or '다리' in title:
         return True
-    # ~교 패턴 (단어 끝이 '교'로 끝나거나 뒤에 공백/숫자/기호가 오는 한글/숫자 조합)
-    # 예: 학산교, 관춘1교, 신흥교 등
     bridge_pattern = re.compile(r'(?:[가-힣A-Za-z0-9]+교(?=[\s\d_\-\[\(\)\.]|$))')
     matches = bridge_pattern.findall(title)
-    
-    # '교육', '교체', '교류', '교재', '교환', '교통' 등 오탐 단어 필터링
     false_positives = {'교육', '교체', '교류', '교재', '교환', '교통', '교원', '교실', '교구'}
     for m in matches:
         if m not in false_positives:
             return True
     return False
 
+# ==================== 첨부파일 다운로드 & 구조분야 기술인 분석 로직 ====================
+
+def download_attachment(url, temp_path):
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            content = resp.read()
+            with open(temp_path, 'wb') as f:
+                f.write(content)
+            return True
+    except Exception as e:
+        return False
+
+def extract_text_hwpx(file_path):
+    text_content = []
+    try:
+        with zipfile.ZipFile(file_path, 'r') as z:
+            for name in z.namelist():
+                if name.startswith('Contents/section') and name.endswith('.xml'):
+                    xml_bytes = z.read(name)
+                    xml_str = xml_bytes.decode('utf-8', errors='ignore')
+                    text_only = re.sub(r'<[^>]+>', ' ', xml_str)
+                    text_content.append(text_only)
+    except Exception:
+        pass
+    return " ".join(text_content)
+
+def extract_text_hwp(file_path):
+    text_content = []
+    if not olefile:
+        return ""
+    try:
+        ole = olefile.OleFileIO(file_path)
+        for d in ole.listdir():
+            if d[0] == 'BodyText':
+                stream = ole.openstream(d)
+                data = stream.read()
+                try:
+                    decompressed = zlib.decompress(data, -15)
+                    text = decompressed.decode('utf-8', errors='ignore') if b'\x00' not in decompressed[:20] else decompressed.decode('utf-16le', errors='ignore')
+                    clean_text = re.sub(r'[\x00-\x09\x0b-\x1f\x7f-\x9f]', ' ', text)
+                    text_content.append(clean_text)
+                except Exception:
+                    pass
+        ole.close()
+    except Exception:
+        pass
+    return " ".join(text_content)
+
+def extract_text_pdf(file_path):
+    text_content = []
+    if not pypdf:
+        return ""
+    try:
+        reader = pypdf.PdfReader(file_path)
+        for page in reader.pages:
+            t = page.extract_text()
+            if t:
+                text_content.append(t)
+    except Exception:
+        pass
+    return " ".join(text_content)
+
+def analyze_structural_engineer(item):
+    """
+    공고 첨부파일을 수집/다운로드하여 구조분야 책임기술인 / 토목구조 자격 요건 검색
+    """
+    keywords = ['구조분야', '구조 분야', '토목구조', '토목 구조', '구조책임', '구조 책임', '구조기술사', '구조 기술사', '구조전문', '구조 전문']
+    
+    matched_excerpts = []
+
+    for k in range(1, 5):
+        doc_url = item.get(f'ntceSpecDocUrl{k}')
+        doc_name = item.get(f'ntceSpecFileNm{k}', '')
+        if not doc_url or not doc_name:
+            continue
+
+        ext = doc_name.split('.')[-1].lower() if '.' in doc_name else ''
+        temp_file = f"temp_attachment_{k}.{ext}"
+
+        if download_attachment(doc_url, temp_file):
+            text = ""
+            if ext == 'hwpx':
+                text = extract_text_hwpx(temp_file)
+            elif ext == 'hwp':
+                text = extract_text_hwp(temp_file)
+            elif ext == 'pdf':
+                text = extract_text_pdf(temp_file)
+
+            if os.path.exists(temp_file):
+                try:
+                    os.remove(temp_file)
+                except Exception:
+                    pass
+
+            if text:
+                lines = re.split(r'[\.\?\!\n\r]', text)
+                for line in lines:
+                    line_clean = line.strip()
+                    if any(kw in line_clean for kw in keywords):
+                        if any(rel in line_clean for rel in ['책임', '기술자', '기술인', '자격', '평가', '배점', '분야', '담당', '투입']):
+                            matched_excerpts.append(line_clean[:100])
+
+    if matched_excerpts:
+        return True, matched_excerpts[0]
+    return False, "첨부파일 내 관련 문구 미발견"
+
+# ==================== 알림 및 대시보드 리포트 생성 ====================
+
 def build_telegram_messages(bids, bgn_date_str):
-    """텔레그램용 HTML 메시지 리스트 생성"""
     header = (
         f"📢 <b>[조달청 나라장터 교량/다리 입찰공고 알림]</b>\n"
         f"📅 조회 기간: {bgn_date_str}\n"
@@ -139,6 +248,10 @@ def build_telegram_messages(bids, bgn_date_str):
         cntrct_mthd = bid.get('cntrctCnclsMthdNm', '미지정')
         detail_url = bid.get('bidNtceDtlUrl') or f"https://www.g2b.go.kr/link/PNPE027_01/single/?bidPbancNo={bid_no}&bidPbancOrd={ord_no}"
 
+        struct_has = bid.get('_struct_has', False)
+        struct_exc = bid.get('_struct_excerpt', '')
+        struct_tag = f"<b>✅ 구조분야 확인됨</b>: <i>{struct_exc}</i>" if struct_has else "<b>🔍 구조분야</b>: 첨부파일 세부확인 필요"
+
         item_str = (
             f"<b>{idx}. [{domain_kr}] {title}</b>\n"
             f"• <b>공고번호</b>: {bid_no}\n"
@@ -147,6 +260,7 @@ def build_telegram_messages(bids, bgn_date_str):
             f"• <b>배정예산</b>: {asign_bdgt}\n"
             f"• <b>계약방법</b>: {cntrct_mthd}\n"
             f"• <b>마감일시</b>: <code>{bid_clse_dt}</code>\n"
+            f"• <b>자격분석</b>: {struct_tag}\n"
             f"🔗 <a href='{detail_url}'>나라장터 공고 상세 보기</a>\n\n"
         )
 
@@ -162,7 +276,6 @@ def build_telegram_messages(bids, bgn_date_str):
     return messages
 
 def send_telegram_message(token, chat_id, message):
-    """텔레그램 API로 메시지 전송"""
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     payload = {
         'chat_id': chat_id,
@@ -191,7 +304,6 @@ def send_telegram_message(token, chat_id, message):
         return False
 
 def send_email_report(smtp_server, smtp_port, smtp_user, smtp_pass, receivers, bids, bgn_date_str):
-    """이메일(HTML 서식 리포트) 전송"""
     if not smtp_user or not smtp_pass or not receivers:
         print("⚠️ SMTP 이메일 설정이 부재하여 이메일 발송을 건너땁니다.")
         return False
@@ -202,7 +314,6 @@ def send_email_report(smtp_server, smtp_port, smtp_user, smtp_pass, receivers, b
 
     subject = f"[조달청 나라장터] 교량/다리/OO교 신규 입찰공고 알림 ({bgn_date_str}) - 총 {len(bids)}건"
 
-    # HTML 이메일 본문 생성
     rows_html = ""
     for idx, bid in enumerate(bids, 1):
         title = bid.get('bidNtceNm', '제목 없음').strip()
@@ -215,6 +326,14 @@ def send_email_report(smtp_server, smtp_port, smtp_user, smtp_pass, receivers, b
         cntrct_mthd = bid.get('cntrctCnclsMthdNm', '미지정')
         detail_url = bid.get('bidNtceDtlUrl') or f"https://www.g2b.go.kr/link/PNPE027_01/single/?bidPbancNo={bid_no}&bidPbancOrd=000"
 
+        struct_has = bid.get('_struct_has', False)
+        struct_exc = bid.get('_struct_excerpt', '')
+        
+        if struct_has:
+            struct_badge = f'<div style="margin-top:6px; background-color:#e6fffa; color:#234e52; border:1px solid #b2f5ea; padding:4px 8px; border-radius:4px; font-size:12px;"><strong>✅ 구조분야 기술인 발견:</strong> {struct_exc}</div>'
+        else:
+            struct_badge = f'<div style="margin-top:6px; color:#718096; font-size:11px;">🔍 구조분야 자격: 첨부파일 서류참조</div>'
+
         bg_color = "#ffffff" if idx % 2 != 0 else "#f9fbfd"
 
         rows_html += f"""
@@ -226,6 +345,7 @@ def send_email_report(smtp_server, smtp_port, smtp_user, smtp_pass, receivers, b
             <td style="padding: 12px;">
                 <a href="{detail_url}" target="_blank" style="color: #2b6cb0; text-decoration: none; font-weight: bold;">{title}</a>
                 <div style="color: #718096; font-size: 12px; margin-top: 4px;">공고번호: {bid_no} | 계약방식: {cntrct_mthd}</div>
+                {struct_badge}
             </td>
             <td style="padding: 12px; color: #2d3748; font-weight: 500;">{instt_nm}</td>
             <td style="padding: 12px; text-align: right; color: #2c5282; font-weight: bold;">{presmpt_prce}<br><span style="color:#718096; font-size:11px; font-weight:normal;">(예산: {asign_bdgt})</span></td>
@@ -243,7 +363,7 @@ def send_email_report(smtp_server, smtp_port, smtp_user, smtp_pass, receivers, b
         <meta charset="utf-8">
     </head>
     <body style="font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; background-color: #f7fafc; margin: 0; padding: 20px;">
-        <div style="max-width: 1000px; margin: 0 auto; background-color: #ffffff; padding: 30px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); border: 1px solid #e2e8f0;">
+        <div style="max-width: 1050px; margin: 0 auto; background-color: #ffffff; padding: 30px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); border: 1px solid #e2e8f0;">
             <h2 style="color: #1a365d; margin-top: 0; border-bottom: 2px solid #3182ce; padding-bottom: 12px;">
                 🌉 조달청 나라장터 입찰공고 매일 리포트
             </h2>
@@ -259,9 +379,9 @@ def send_email_report(smtp_server, smtp_port, smtp_user, smtp_pass, receivers, b
                     <tr style="background-color: #2b6cb0; color: #ffffff;">
                         <th style="padding: 12px; width: 40px;">#</th>
                         <th style="padding: 12px; width: 80px;">분야</th>
-                        <th style="padding: 12px;">입찰 공고명</th>
+                        <th style="padding: 12px;">입찰 공고명 & 자격 분석</th>
                         <th style="padding: 12px; width: 140px;">수요기관</th>
-                        <th style="padding: 12px; width: 160px; text-align: right;">추정가격 / 예산</th>
+                        <th style="padding: 12px; width: 150px; text-align: right;">추정가격 / 예산</th>
                         <th style="padding: 12px; width: 140px; text-align: center;">입찰마감일시</th>
                         <th style="padding: 12px; width: 90px; text-align: center;">상세링크</th>
                     </tr>
@@ -299,7 +419,6 @@ def send_email_report(smtp_server, smtp_port, smtp_user, smtp_pass, receivers, b
         return False
 
 def generate_web_dashboard(bids, bgn_date_str):
-    """GitHub Pages용 인터랙티브 웹 대시보드(index.html) 생성"""
     data_json = json.dumps(bids, ensure_ascii=False)
     
     html_content = f"""<!DOCTYPE html>
@@ -311,7 +430,7 @@ def generate_web_dashboard(bids, bgn_date_str):
     <style>
         * {{ box-sizing: border-box; font-family: 'Pretendard', 'Apple SD Gothic Neo', sans-serif; }}
         body {{ background-color: #f4f6f9; color: #333; margin: 0; padding: 20px; }}
-        .container {{ max-width: 1200px; margin: 0 auto; background: #fff; border-radius: 12px; padding: 25px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); }}
+        .container {{ max-width: 1250px; margin: 0 auto; background: #fff; border-radius: 12px; padding: 25px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); }}
         header {{ border-bottom: 2px solid #2b6cb0; padding-bottom: 15px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; }}
         h1 {{ color: #1a365d; margin: 0; font-size: 24px; }}
         .info-bar {{ background: #ebf8ff; color: #2c5282; padding: 12px 18px; border-radius: 8px; margin-bottom: 20px; font-size: 14px; font-weight: 500; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; }}
@@ -329,6 +448,9 @@ def generate_web_dashboard(bids, bgn_date_str):
         .badge-servc {{ background-color: #ebf8ff; color: #2b6cb0; }}
         .badge-cnstwk {{ background-color: #feebc8; color: #c05621; }}
         
+        .struct-badge-yes {{ margin-top: 6px; background-color: #e6fffa; color: #234e52; border: 1px solid #b2f5ea; padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: 500; }}
+        .struct-badge-no {{ margin-top: 6px; color: #a0aec0; font-size: 11px; }}
+
         .price {{ color: #2c5282; font-weight: bold; text-align: right; }}
         .deadline {{ color: #e53e3e; font-size: 13px; font-family: monospace; text-align: center; }}
         .btn-link {{ background-color: #3182ce; color: white; padding: 6px 12px; text-decoration: none; border-radius: 4px; font-size: 12px; font-weight: 500; display: inline-block; transition: background 0.2s; }}
@@ -344,12 +466,16 @@ def generate_web_dashboard(bids, bgn_date_str):
         </header>
 
         <div class="info-bar">
-            <div>📌 <strong>조회 기간:</strong> {bgn_date_str} | <strong>대상 분야:</strong> 기술용역, 공사 | <strong>조건:</strong> 추정가격 1억 원 이상</div>
+            <div>📌 <strong>조회 기간:</strong> {bgn_date_str} | <strong>대상 분야:</strong> 기술용역, 공사 | <strong>조건:</strong> 1억 원 이상</div>
             <div>수집된 공고: <span class="count-tag" id="totalCount">{len(bids)}</span>건</div>
         </div>
 
         <div class="controls">
-            <input type="text" id="searchInput" class="search-box" placeholder="공고명, 수요기관, 공고번호 검색..." oninput="renderTable()">
+            <input type="text" id="searchInput" class="search-box" placeholder="공고명, 수요기관, 자격 문구 검색..." oninput="renderTable()">
+            <select id="structFilter" class="filter-select" onchange="renderTable()">
+                <option value="ALL">전체 자격 조건 보기</option>
+                <option value="STRUCT_ONLY">구조분야 기술인 명시 공고만 보기 (✅)</option>
+            </select>
             <select id="domainFilter" class="filter-select" onchange="renderTable()">
                 <option value="ALL">전체 분야 보기</option>
                 <option value="기술용역">기술용역</option>
@@ -367,9 +493,9 @@ def generate_web_dashboard(bids, bgn_date_str):
                 <tr>
                     <th style="width: 50px;">#</th>
                     <th style="width: 90px;">분야</th>
-                    <th>입찰 공고명</th>
-                    <th style="width: 180px;">수요기관</th>
-                    <th style="width: 180px; text-align: right;">추정가격 (배정예산)</th>
+                    <th>입찰 공고명 & 첨부파일 기술인 분석</th>
+                    <th style="width: 170px;">수요기관</th>
+                    <th style="width: 170px; text-align: right;">추정가격 (배정예산)</th>
                     <th style="width: 150px; text-align: center;">입찰마감일시</th>
                     <th style="width: 90px; text-align: center;">상세보기</th>
                 </tr>
@@ -395,22 +521,24 @@ def generate_web_dashboard(bids, bgn_date_str):
 
         function renderTable() {{
             const searchKw = document.getElementById('searchInput').value.trim().toLowerCase();
+            const structVal = document.getElementById('structFilter').value;
             const domainVal = document.getElementById('domainFilter').value;
             const sortVal = document.getElementById('sortSelect').value;
 
             let filtered = rawBids.filter(bid => {{
                 const title = (bid.bidNtceNm || '').toLowerCase();
                 const instt = (bid.dminsttNm || bid.ntceInsttNm || '').toLowerCase();
-                const bidNo = (bid.bidNtceNo || '').toLowerCase();
+                const structExc = (bid._struct_excerpt || '').toLowerCase();
                 const domain = bid._domain_kr || '';
+                const hasStruct = bid._struct_has || false;
 
-                const matchesSearch = title.includes(searchKw) || instt.includes(searchKw) || bidNo.includes(searchKw);
+                const matchesSearch = title.includes(searchKw) || instt.includes(searchKw) || structExc.includes(searchKw);
                 const matchesDomain = (domainVal === 'ALL') || (domain === domainVal);
+                const matchesStruct = (structVal === 'ALL') || (structVal === 'STRUCT_ONLY' && hasStruct);
 
-                return matchesSearch && matchesDomain;
+                return matchesSearch && matchesDomain && matchesStruct;
             }});
 
-            // 정렬 로직
             filtered.sort((a, b) => {{
                 const priceA = parseInt(a.presmptPrce || a.asignBdgtAmt || 0, 10);
                 const priceB = parseInt(b.presmptPrce || b.asignBdgtAmt || 0, 10);
@@ -424,7 +552,7 @@ def generate_web_dashboard(bids, bgn_date_str):
 
             const tbody = document.getElementById('tableBody');
             if (filtered.length === 0) {{
-                tbody.innerHTML = `<tr><td colspan="7" style="text-align: center; padding: 40px; color: #a0aec0;">검색 결과에 맞는 입찰 공고가 없습니다.</td></tr>`;
+                tbody.innerHTML = `<tr><td colspan="7" style="text-align: center; padding: 40px; color: #a0aec0;">검색 조건에 맞는 공고가 없습니다.</td></tr>`;
                 return;
             }}
 
@@ -434,6 +562,13 @@ def generate_web_dashboard(bids, bgn_date_str):
                 const insttNm = bid.dminsttNm || bid.ntceInsttNm || '미지정';
                 const priceStr = formatPrice(bid.presmptPrce || bid.asignBdgtAmt);
                 const detailUrl = bid.bidNtceDtlUrl || `https://www.g2b.go.kr/link/PNPE027_01/single/?bidPbancNo=${{bid.bidNtceNo}}&bidPbancOrd=${{bid.bidNtceOrd || '000'}}`;
+                
+                const hasStruct = bid._struct_has || false;
+                const structExc = bid._struct_excerpt || '';
+
+                const structHtml = hasStruct 
+                    ? `<div class="struct-badge-yes"><strong>✅ 구조분야 기술인 요구:</strong> "${{structExc}}..."</div>`
+                    : `<div class="struct-badge-no">🔍 구조분야 자격: 첨부 서류 직접 확인 필요</div>`;
 
                 return `
                     <tr>
@@ -442,6 +577,7 @@ def generate_web_dashboard(bids, bgn_date_str):
                         <td>
                             <a href="${{detailUrl}}" target="_blank" style="color: #2b6cb0; text-decoration: none; font-weight: bold;">${{bid.bidNtceNm}}</a>
                             <div style="color: #718096; font-size: 12px; margin-top: 4px;">공고번호: ${{bid.bidNtceNo}} | 계약방법: ${{bid.cntrctCnclsMthdNm || '미지정'}}</div>
+                            ${{structHtml}}
                         </td>
                         <td style="color: #4a5568;">${{insttNm}}</td>
                         <td class="price">${{priceStr}}</td>
@@ -464,29 +600,25 @@ def generate_web_dashboard(bids, bgn_date_str):
     print("✅ 웹 대시보드(index.html) 생성 완료!")
 
 def main():
-    print("🚀 조달청 나라장터 [교량/공사 1억 이상] 자동 알림 스크립트 시작")
+    print("🚀 조달청 나라장터 [교량/공사 1억 이상 + 첨부파일 구조기술자 분석] 스크립트 시작")
 
-    # 1. 환경 변수 및 기본 설정
     service_key = get_env_or_default('SERVICE_KEY', load_default_service_key())
     bot_token = get_env_or_default('TELEGRAM_BOT_TOKEN')
     chat_id = get_env_or_default('TELEGRAM_CHAT_ID')
 
-    # 이메일 관련 환경 변수 (기본값 설정)
     smtp_server = get_env_or_default('SMTP_SERVER', 'smtp.gmail.com')
     smtp_port = get_env_or_default('SMTP_PORT', '587')
     smtp_user = get_env_or_default('SMTP_USER')
     smtp_pass = get_env_or_default('SMTP_PASS')
     email_receivers = get_env_or_default('EMAIL_RECEIVERS', 'jh_moon@dohwa.co.kr, moonji8203@gmail.com')
 
-    # 필터 조건 설정
-    target_domains = ['Servc', 'Cnstwk']  # 기술용역, 공사
-    search_keywords = ['교량', '다리', '교']  # API 호출용 키워드
-    exclude_keywords = ['학교', '초등', '고등']  # 제외 키워드
-    min_price_threshold = 100000000  # 1억 원 이상
+    target_domains = ['Servc', 'Cnstwk']
+    search_keywords = ['교량', '다리', '교']
+    exclude_keywords = ['학교', '초등', '고등']
+    min_price_threshold = 100000000
 
-    search_days = int(get_env_or_default('SEARCH_DAYS', '2'))  # 기본 최근 2일 조회
+    search_days = int(get_env_or_default('SEARCH_DAYS', '2'))
 
-    # 2. 조회 기간 계산
     now = datetime.datetime.now()
     start_date = now - datetime.timedelta(days=search_days)
     bgn_dt = start_date.strftime('%Y%m%d0000')
@@ -494,11 +626,7 @@ def main():
     bgn_date_str = f"{start_date.strftime('%Y-%m-%d')} ~ {now.strftime('%Y-%m-%d')}"
 
     print(f"📌 검색 기간: {bgn_dt} ~ {end_dt}")
-    print(f"📌 검색 분야: 기술용역(Servc), 공사(Cnstwk)")
-    print(f"📌 키워드 조건: '교량', '다리', 'OO교' 패턴 감지 (제외: {exclude_keywords})")
-    print(f"📌 가격 조건: 추정가격/예산 {min_price_threshold:,} 원 이상")
 
-    # 3. 공고 수집 및 정교한 필터링
     all_bids_dict = {}
 
     for domain in target_domains:
@@ -507,7 +635,6 @@ def main():
 
         for kw in search_keywords:
             items = fetch_bids(service_key, op_name, kw, bgn_dt, end_dt)
-            print(f"   - API 검색어 '{kw}': {len(items)}건 응답")
 
             for item in items:
                 bid_no = item.get('bidNtceNo')
@@ -516,15 +643,12 @@ def main():
                 asign_bdgt = int(item.get('asignBdgtAmt') or 0)
                 price = max(presmpt_prce, asign_bdgt)
 
-                # 조건 1: 제외 키워드 검사 ('학교', '초등', '고등')
                 if any(ex in title for ex in exclude_keywords):
                     continue
 
-                # 조건 2: 가격 1억 원 이상 검사
                 if price < min_price_threshold:
                     continue
 
-                # 조건 3: '교량', '다리', 'OO교' 패턴 검사
                 if not is_target_bridge_title(title):
                     continue
 
@@ -535,27 +659,28 @@ def main():
     all_bids = list(all_bids_dict.values())
     all_bids.sort(key=lambda x: int(x.get('presmptPrce') or x.get('asignBdgtAmt') or 0), reverse=True)
 
-    print(f"\n🎯 최종 필터링 완료된 공고 수: {len(all_bids)}건")
+    print(f"\n🎯 대상 공고 수: {len(all_bids)}건")
+    print("📄 첨부파일(HWP, HWPX, PDF) 다운로드 및 구조분야 책임기술인 요건 자동 분석 중...")
 
-    # 4. 웹 대시보드(index.html) 생성
+    for idx, bid in enumerate(all_bids, 1):
+        print(f"   [{idx}/{len(all_bids)}] {bid.get('bidNtceNm')[:30]}... 분석 중")
+        has_struct, excerpt = analyze_structural_engineer(bid)
+        bid['_struct_has'] = has_struct
+        bid['_struct_excerpt'] = excerpt
+        if has_struct:
+            print(f"      👉 ✅ 구조분야 자격 명시 확인됨: {excerpt[:50]}")
+
     generate_web_dashboard(all_bids, bgn_date_str)
 
-    # 5. 텔레그램 알림 발송
     tg_messages = build_telegram_messages(all_bids, bgn_date_str)
     if bot_token and chat_id:
         print("\n📤 텔레그램 메시지 발송 중...")
         for msg in tg_messages:
             send_telegram_message(bot_token, chat_id, msg)
-    else:
-        print("\n⚠️ 텔레그램 토큰 미설정 (콘솔 출력)")
-        print(tg_messages[0][:500])
 
-    # 6. 이메일 발송
     if smtp_user and smtp_pass:
         print("\n✉️ 이메일 리포트 발송 중...")
         send_email_report(smtp_server, smtp_port, smtp_user, smtp_pass, email_receivers, all_bids, bgn_date_str)
-    else:
-        print("\n💡 SMTP_USER / SMTP_PASS 환경 변수를 등록하면 지정하신 이메일로 매일 리포트가 발송됩니다.")
 
 if __name__ == "__main__":
     main()
