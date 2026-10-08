@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import re
+import time
 import datetime
 import urllib.parse
 import urllib.request
@@ -11,7 +12,7 @@ import zlib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
-# HWP / PDF 파싱용 라이브러리 (체크)
+# HWP / PDF 파싱용 라이브러리
 try:
     import olefile
 except ImportError:
@@ -51,7 +52,7 @@ def get_env_or_default(key, default=""):
     val = os.getenv(key, "").strip()
     return val if val else default
 
-def fetch_bids(service_key, op_name, keyword, bgn_dt, end_dt):
+def fetch_bids(service_key, op_name, keyword, bgn_dt, end_dt, retries=3):
     params = {
         'serviceKey': service_key,
         'type': 'json',
@@ -65,25 +66,34 @@ def fetch_bids(service_key, op_name, keyword, bgn_dt, end_dt):
         params['bidNtceNm'] = keyword
 
     url = f"{BASE_URL}/{op_name}?{urllib.parse.urlencode(params)}"
-    req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-    
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            data = json.loads(resp.read().decode('utf-8'))
-            header = data.get('response', {}).get('header', {})
-            result_code = header.get('resultCode')
-            
-            if result_code != '00':
-                print(f"API Warning [{op_name}]: {header.get('resultMsg')}")
-                return []
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, Gecko) Chrome/122.0.0.0 Safari/537.36',
+        'Accept': 'application/json, text/plain, */*',
+        'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
+        'Connection': 'keep-alive'
+    }
+
+    for attempt in range(1, retries + 1):
+        try:
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=45) as resp:
+                data = json.loads(resp.read().decode('utf-8'))
+                header = data.get('response', {}).get('header', {})
+                result_code = header.get('resultCode')
                 
-            items = data.get('response', {}).get('body', {}).get('items', [])
-            if isinstance(items, dict):
-                items = [items]
-            return items
-    except Exception as e:
-        print(f"API Request Error [{op_name} - {keyword}]: {e}")
-        return []
+                if result_code != '00':
+                    print(f"⚠️ API Warning [{op_name}]: {header.get('resultMsg')}")
+                    return []
+                    
+                items = data.get('response', {}).get('body', {}).get('items', [])
+                if isinstance(items, dict):
+                    items = [items]
+                return items
+        except Exception as e:
+            print(f"⚠️ Attempt {attempt}/{retries} failed for [{op_name} - {keyword}]: {e}")
+            if attempt < retries:
+                time.sleep(3)
+    return []
 
 def format_price(amount_str):
     if not amount_str:
@@ -100,28 +110,32 @@ def format_price(amount_str):
         return str(amount_str)
 
 def is_target_bridge_title(title):
+    # 학교 연계 표현 (예: "초 외 1교", "향교", "중학") 예외 처리
+    if re.search(r'외\s*\d+\s*교', title) or '향교' in title or '중학' in title:
+        return False
     if '교량' in title or '다리' in title:
         return True
     bridge_pattern = re.compile(r'(?:[가-힣A-Za-z0-9]+교(?=[\s\d_\-\[\(\)\.]|$))')
     matches = bridge_pattern.findall(title)
-    false_positives = {'교육', '교체', '교류', '교재', '교환', '교통', '교원', '교실', '교구'}
+    false_positives = {'교육', '교체', '교류', '교재', '교환', '교통', '교원', '교실', '교구', '향교', '종교', '설교', '불교', '주교'}
     for m in matches:
         if m not in false_positives:
             return True
     return False
 
-# ==================== 첨부파일 다운로드 & 구조분야 기술인 분석 로직 ====================
-
 def download_attachment(url, temp_path):
-    headers = {'User-Agent': 'Mozilla/5.0'}
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': '*/*'
+    }
     req = urllib.request.Request(url, headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        with urllib.request.urlopen(req, timeout=20) as resp:
             content = resp.read()
             with open(temp_path, 'wb') as f:
                 f.write(content)
             return True
-    except Exception as e:
+    except Exception:
         return False
 
 def extract_text_hwpx(file_path):
@@ -175,21 +189,17 @@ def extract_text_pdf(file_path):
     return " ".join(text_content)
 
 def analyze_structural_engineer(item):
-    """
-    공고 첨부파일을 수집/다운로드하여 구조분야 책임기술인 / 토목구조 자격 요건 검색
-    """
     keywords = ['구조분야', '구조 분야', '토목구조', '토목 구조', '구조책임', '구조 책임', '구조기술사', '구조 기술사', '구조전문', '구조 전문']
-    
     matched_excerpts = []
 
-    for k in range(1, 5):
+    for k in range(1, 4):
         doc_url = item.get(f'ntceSpecDocUrl{k}')
         doc_name = item.get(f'ntceSpecFileNm{k}', '')
         if not doc_url or not doc_name:
             continue
 
         ext = doc_name.split('.')[-1].lower() if '.' in doc_name else ''
-        temp_file = f"temp_attachment_{k}.{ext}"
+        temp_file = f"temp_file_{k}.{ext}"
 
         if download_attachment(doc_url, temp_file):
             text = ""
@@ -216,9 +226,7 @@ def analyze_structural_engineer(item):
 
     if matched_excerpts:
         return True, matched_excerpts[0]
-    return False, "첨부파일 내 관련 문구 미발견"
-
-# ==================== 알림 및 대시보드 리포트 생성 ====================
+    return False, "첨부파일 서류 직접 확인 필요"
 
 def build_telegram_messages(bids, bgn_date_str):
     header = (
@@ -250,7 +258,7 @@ def build_telegram_messages(bids, bgn_date_str):
 
         struct_has = bid.get('_struct_has', False)
         struct_exc = bid.get('_struct_excerpt', '')
-        struct_tag = f"<b>✅ 구조분야 확인됨</b>: <i>{struct_exc}</i>" if struct_has else "<b>🔍 구조분야</b>: 첨부파일 세부확인 필요"
+        struct_tag = f"<b>✅ 구조분야 확인됨</b>: <i>{struct_exc}</i>" if struct_has else "<b>🔍 구조분야</b>: 첨부 서류 직접 확인 필요"
 
         item_str = (
             f"<b>{idx}. [{domain_kr}] {title}</b>\n"
@@ -332,7 +340,7 @@ def send_email_report(smtp_server, smtp_port, smtp_user, smtp_pass, receivers, b
         if struct_has:
             struct_badge = f'<div style="margin-top:6px; background-color:#e6fffa; color:#234e52; border:1px solid #b2f5ea; padding:4px 8px; border-radius:4px; font-size:12px;"><strong>✅ 구조분야 기술인 발견:</strong> {struct_exc}</div>'
         else:
-            struct_badge = f'<div style="margin-top:6px; color:#718096; font-size:11px;">🔍 구조분야 자격: 첨부파일 서류참조</div>'
+            struct_badge = f'<div style="margin-top:6px; color:#718096; font-size:11px;">🔍 구조분야 자격: 첨부 서류 직접 확인 필요</div>'
 
         bg_color = "#ffffff" if idx % 2 != 0 else "#f9fbfd"
 
@@ -617,7 +625,7 @@ def main():
     exclude_keywords = ['학교', '초등', '고등']
     min_price_threshold = 100000000
 
-    search_days = int(get_env_or_default('SEARCH_DAYS', '2'))
+    search_days = int(get_env_or_default('SEARCH_DAYS', '7'))
 
     now = datetime.datetime.now()
     start_date = now - datetime.timedelta(days=search_days)
@@ -635,6 +643,7 @@ def main():
 
         for kw in search_keywords:
             items = fetch_bids(service_key, op_name, kw, bgn_dt, end_dt)
+            print(f"   - 키워드 '{kw}': {len(items)}건 수집")
 
             for item in items:
                 bid_no = item.get('bidNtceNo')
@@ -659,16 +668,29 @@ def main():
     all_bids = list(all_bids_dict.values())
     all_bids.sort(key=lambda x: int(x.get('presmptPrce') or x.get('asignBdgtAmt') or 0), reverse=True)
 
-    print(f"\n🎯 대상 공고 수: {len(all_bids)}건")
-    print("📄 첨부파일(HWP, HWPX, PDF) 다운로드 및 구조분야 책임기술인 요건 자동 분석 중...")
+    print(f"\n🎯 정제된 교량/공사 대상 공고 수: {len(all_bids)}건")
 
-    for idx, bid in enumerate(all_bids, 1):
-        print(f"   [{idx}/{len(all_bids)}] {bid.get('bidNtceNm')[:30]}... 분석 중")
-        has_struct, excerpt = analyze_structural_engineer(bid)
-        bid['_struct_has'] = has_struct
-        bid['_struct_excerpt'] = excerpt
-        if has_struct:
-            print(f"      👉 ✅ 구조분야 자격 명시 확인됨: {excerpt[:50]}")
+    if all_bids:
+        print("📄 첨부파일(HWP, HWPX, PDF) 다운로드 및 구조분야 책임기술인 요건 자동 분석 중...")
+        for idx, bid in enumerate(all_bids, 1):
+            print(f"   [{idx}/{len(all_bids)}] {bid.get('bidNtceNm')[:30]}... 분석 중")
+            has_struct, excerpt = analyze_structural_engineer(bid)
+            bid['_struct_has'] = has_struct
+            bid['_struct_excerpt'] = excerpt
+            if has_struct:
+                print(f"      👉 ✅ 구조분야 자격 명시 확인됨: {excerpt[:50]}")
+    else:
+        print("⚠️ 신규 데이터 0건인 경우 기존 index.html의 데이터를 유지합니다.")
+        if os.path.exists('index.html'):
+            try:
+                with open('index.html', 'r', encoding='utf-8') as f:
+                    content = f.read()
+                    match = re.search(r'const rawBids = (\[.*?\]);', content, re.DOTALL)
+                    if match:
+                        all_bids = json.loads(match.group(1))
+                        print(f"🔄 기존 대시보드 데이터 {len(all_bids)}건 재사용완료")
+            except Exception as e:
+                print(f"기존 대시보드 로드 예외: {e}")
 
     generate_web_dashboard(all_bids, bgn_date_str)
 
