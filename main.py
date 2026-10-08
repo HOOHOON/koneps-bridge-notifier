@@ -138,7 +138,7 @@ def format_price(amount_val):
         return "미지정"
     val = safe_int(amount_val)
     if val == 0:
-        return "미지정 (0원)"
+        return "미지정"
     if val >= 100000000:
         return f"{val / 100000000:.2f} 억 원 ({val:,} 원)"
     elif val >= 10000:
@@ -340,15 +340,15 @@ def build_telegram_messages(bids, bgn_date_str):
     c_orderplan = sum(1 for b in bids if b.get('_stage') == '발주계획')
 
     header = (
-        f"📢 <b>[조달청 나라장터 교량/다리 통합 48시간 리포트]</b>\n"
+        f"📢 <b>[조달청 나라장터 교량/다리 통합 48시간 리포트 (2억 이상)]</b>\n"
         f"📅 수집 기간: {bgn_date_str}\n"
-        f"💰 가격 조건: <b>2억 원 이상</b> (발주계획 포함)\n"
+        f"💰 최소 금액 조건: <b>2억 원 이상 (엄격 필터링)</b>\n"
         f"📊 <b>단계별 요약</b>: 🔵 입찰공고 <b>{c_bid}건</b> | 🟡 사전규격 <b>{c_prespec}건</b> | 🟣 발주계획 <b>{c_orderplan}건</b> (총 <b>{len(bids)}건</b>)\n"
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
     )
 
     if not bids:
-        return [header + "지난 48시간 동안 조건(2억 이상)에 맞는 신규 입찰 공고/계획이 없습니다. 😊"]
+        return [header + "지난 48시간 동안 조건(2억 원 이상)에 맞는 신규 공고/계획이 없습니다. 😊"]
 
     messages = []
     current_msg = header
@@ -504,11 +504,11 @@ def send_email_report(smtp_server, smtp_port, smtp_user, smtp_pass, receivers, b
     <body style="font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; background-color: #f7fafc; margin: 0; padding: 20px;">
         <div style="max-width: 1100px; margin: 0 auto; background-color: #ffffff; padding: 30px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); border: 1px solid #e2e8f0;">
             <h2 style="color: #1a365d; margin-top: 0; border-bottom: 2px solid #3182ce; padding-bottom: 12px;">
-                🌉 조달청 나라장터 교량/다리 통합 48시간 리포트 (2억 원 이상)
+                🌉 조달청 나라장터 교량/다리 통합 48시간 리포트 (2억 원 이상 엄격 기준)
             </h2>
             <div style="background-color: #ebf8ff; border-left: 4px solid #3182ce; padding: 14px 18px; margin-bottom: 24px; border-radius: 6px; color: #2c5282;">
                 <strong>📅 수집 기간 (최근 48시간):</strong> {bgn_date_str}<br>
-                <strong>💰 최소 금액 조건:</strong> <span style="font-weight:bold; color:#e53e3e;">2억 원 이상</span> (발주계획 포함)<br>
+                <strong>💰 최소 금액 조건:</strong> <span style="font-weight:bold; color:#e53e3e;">2억 원 이상</span><br>
                 <strong>📊 수집 건수:</strong> 
                 <span style="font-size:15px; font-weight:bold; color:#2b6cb0;">🔵 입찰공고 {c_bid}건</span> | 
                 <span style="font-size:15px; font-weight:bold; color:#b7791f;">🟡 사전규격 {c_prespec}건</span> | 
@@ -573,19 +573,20 @@ def generate_web_dashboard(bids, bgn_date_str):
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>조달청 나라장터 교량/다리 통합 대시보드 (2억 이상)</title>
+    <title>조달청 나라장터 교량/다리 통합 대시보드 (2억 원 이상)</title>
     <style>
         * {{ box-sizing: border-box; font-family: 'Pretendard', 'Apple SD Gothic Neo', sans-serif; }}
         body {{ background-color: #f4f6f9; color: #333; margin: 0; padding: 20px; }}
         .container {{ max-width: 1400px; margin: 0 auto; background: #fff; border-radius: 12px; padding: 25px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); }}
         header {{ border-bottom: 2px solid #2b6cb0; padding-bottom: 15px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; }}
         h1 {{ color: #1a365d; margin: 0; font-size: 24px; }}
-        .sub-header {{ font-size: 13px; color: #718096; }}
+        .sub-header {{ font-size: 13px; color: #718096; margin-top: 4px; }}
         
         .info-bar {{ background: #ebf8ff; color: #2c5282; padding: 14px 18px; border-radius: 8px; margin-bottom: 20px; font-size: 14px; font-weight: 500; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; }}
         
         .stat-group {{ display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }}
-        .stat-card {{ padding: 6px 12px; border-radius: 6px; font-size: 13px; font-weight: bold; border: 1px solid transparent; display: flex; align-items: center; gap: 5px; }}
+        .stat-card {{ padding: 8px 14px; border-radius: 8px; font-size: 13px; font-weight: bold; border: 1px solid transparent; cursor: pointer; transition: all 0.2s; display: flex; align-items: center; gap: 6px; user-select: none; }}
+        .stat-card:hover {{ transform: translateY(-2px); box-shadow: 0 3px 8px rgba(0,0,0,0.1); }}
         .stat-card-bid {{ background-color: #eef6ff; color: #2b6cb0; border-color: #bee3f8; }}
         .stat-card-prespec {{ background-color: #fffdf0; color: #975a16; border-color: #f6e05e; }}
         .stat-card-orderplan {{ background-color: #fcfaff; color: #6b46c1; border-color: #e9d8fd; }}
@@ -616,7 +617,6 @@ def generate_web_dashboard(bids, bgn_date_str):
         .deadline {{ color: #e53e3e; font-size: 13px; font-family: monospace; text-align: center; }}
         .btn-link {{ background-color: #3182ce; color: white; padding: 6px 12px; text-decoration: none; border-radius: 4px; font-size: 12px; font-weight: 500; display: inline-block; transition: background 0.2s; }}
         .btn-link:hover {{ background-color: #2b6cb0; }}
-        .title-tag {{ display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: bold; margin-right: 6px; vertical-align: middle; }}
     </style>
 </head>
 <body>
@@ -624,7 +624,7 @@ def generate_web_dashboard(bids, bgn_date_str):
         <header>
             <div>
                 <h1>🌉 조달청 나라장터 교량/다리 통합 대시보드</h1>
-                <div class="sub-header">수집 대상: <strong>입찰공고 · 사전규격공개 · 발주계획 (최근 48시간 / 2억 원 이상)</strong></div>
+                <div class="sub-header">수집 대상: <strong>입찰공고 · 사전규격공개 · 발주계획 (최근 48시간 / 2억 원 이상 엄격 기준)</strong></div>
             </div>
             <div style="font-size: 13px; color: #718096;">최종 업데이트: <strong>{datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}</strong></div>
         </header>
@@ -632,10 +632,10 @@ def generate_web_dashboard(bids, bgn_date_str):
         <div class="info-bar">
             <div>📌 <strong>수집 기간:</strong> {bgn_date_str} | <strong>최소 금액:</strong> <span style="color:#e53e3e; font-weight:bold;">2억 원 이상</span></div>
             <div class="stat-group">
-                <div class="stat-card stat-card-bid">🔵 입찰공고 <span>{c_bid}건</span></div>
-                <div class="stat-card stat-card-prespec">🟡 사전규격 <span>{c_prespec}건</span></div>
-                <div class="stat-card stat-card-orderplan">🟣 발주계획 <span>{c_orderplan}건</span></div>
-                <div class="stat-card stat-card-total">🔥 전체 <span id="totalCount">{len(bids)}건</span></div>
+                <div class="stat-card stat-card-bid" onclick="filterByStage('입찰공고')" title="클릭 시 입찰공고만 보기">🔵 입찰공고 <span id="countBid">{c_bid}건</span></div>
+                <div class="stat-card stat-card-prespec" onclick="filterByStage('사전규격')" title="클릭 시 사전규격공개만 보기">🟡 사전규격공개 <span id="countPrespec">{c_prespec}건</span></div>
+                <div class="stat-card stat-card-orderplan" onclick="filterByStage('발주계획')" title="클릭 시 발주계획만 보기">🟣 발주계획현황 <span id="countOrderplan">{c_orderplan}건</span></div>
+                <div class="stat-card stat-card-total" onclick="filterByStage('ALL')" title="클릭 시 전체 보기">🔥 전체 <span id="totalCount">{len(bids)}건</span></div>
             </div>
         </div>
 
@@ -668,7 +668,7 @@ def generate_web_dashboard(bids, bgn_date_str):
             <thead>
                 <tr>
                     <th style="width: 40px;">#</th>
-                    <th style="width: 115px;">구분 (단계)</th>
+                    <th style="width: 120px;">구분 (단계)</th>
                     <th style="width: 80px;">분야</th>
                     <th>공고/사업명 & 사업책임기술인(TL) 주관 분야 분석</th>
                     <th style="width: 170px;">수요기관</th>
@@ -684,11 +684,16 @@ def generate_web_dashboard(bids, bgn_date_str):
     <script>
         const rawBids = {data_json};
 
+        function filterByStage(stageName) {{
+            document.getElementById('stageFilter').value = stageName;
+            renderTable();
+        }}
+
         function formatPrice(valStr) {{
             if (!valStr && valStr !== 0) return "미지정";
             const val = parseInt(valStr, 10);
             if (isNaN(val)) return valStr;
-            if (val === 0) return "미지정 (0원)";
+            if (val === 0) return "미지정";
             if (val >= 100000000) {{
                 return (val / 100000000).toFixed(2) + " 억 원";
             }} else if (val >= 10000) {{
@@ -733,11 +738,19 @@ def generate_web_dashboard(bids, bgn_date_str):
                 return 0;
             }});
 
-            document.getElementById('totalCount').innerText = filtered.length;
+            // 동적 요약 수량 업데이트
+            const cBid = filtered.filter(b => b._stage === '입찰공고').length;
+            const cPrespec = filtered.filter(b => b._stage === '사전규격').length;
+            const cOrderplan = filtered.filter(b => b._stage === '발주계획').length;
+
+            document.getElementById('countBid').innerText = cBid + "건";
+            document.getElementById('countPrespec').innerText = cPrespec + "건";
+            document.getElementById('countOrderplan').innerText = cOrderplan + "건";
+            document.getElementById('totalCount').innerText = filtered.length + "건";
 
             const tbody = document.getElementById('tableBody');
             if (filtered.length === 0) {{
-                tbody.innerHTML = `<tr><td colspan="8" style="text-align: center; padding: 40px; color: #a0aec0;">최근 48시간 동안 조건(2억 이상)에 맞는 공고/사전규격/발주계획이 없습니다.</td></tr>`;
+                tbody.innerHTML = `<tr><td colspan="8" style="text-align: center; padding: 40px; color: #a0aec0;">최근 48시간 동안 조건(2억 원 이상)에 맞는 공고/사전규격/발주계획이 없습니다.</td></tr>`;
                 return;
             }}
 
@@ -795,7 +808,7 @@ def generate_web_dashboard(bids, bgn_date_str):
 
     with open('index.html', 'w', encoding='utf-8') as f:
         f.write(html_content)
-    print("✅ 웹 대시보드(index.html) 2억 이상 수집 완료!")
+    print("✅ 웹 대시보드(index.html) 2억 이상 엄격 기준 수집 완료!")
 
 def main():
     print("🚀 조달청 나라장터 [최근 48시간 교량/다리 2억 이상 (입찰공고·사전규격·발주계획) + 사업책임기술인(TL) 분석] 시작")
@@ -811,7 +824,7 @@ def main():
     email_receivers = get_env_or_default('EMAIL_RECEIVERS', 'jh_moon@dohwa.co.kr, moonji8203@gmail.com')
 
     search_keywords = ['교량', '다리', '교']
-    min_price_threshold = 200000000  # 2억 원 이상
+    min_price_threshold = 200000000  # 2억 원 이상 엄격 기준
 
     # 48시간 (2일) 기준 조회
     search_days = int(get_env_or_default('SEARCH_DAYS', '2'))
@@ -823,7 +836,7 @@ def main():
     bgn_date_str = f"{start_date.strftime('%Y-%m-%d %H:%M')} ~ {now.strftime('%Y-%m-%d %H:%M')}"
 
     print(f"📌 수집 기간: {bgn_date_str} ({bgn_dt} ~ {end_dt})")
-    print(f"💰 최소 금액 조건: {min_price_threshold / 100000000:.0f}억 원 이상")
+    print(f"💰 최소 금액 조건: {min_price_threshold / 100000000:.0f}억 원 이상 (엄격 적용)")
 
     all_items_dict = {}
 
@@ -896,8 +909,8 @@ def main():
                 p3 = safe_int(item.get('sumOrderAmt'))
                 price = max(p1, p2, p3)
 
-                # 금액이 지정된 경우 2억 이상 필터링 (미지정 0원인 발주계획은 포함)
-                if price > 0 and price < min_price_threshold:
+                # 2억 이상 조건 및 교량 명칭 엄격 필터링 (2억 미만 완벽 제거)
+                if price < min_price_threshold:
                     continue
                 if not is_target_bridge_title(title):
                     continue
